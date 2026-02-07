@@ -756,10 +756,20 @@ class CertService
 
         $renewStderr = $renew['stderr'] ?? '';
         $renewOutput = $renew['output'] ?? '';
+        $renewCombined = trim($renewOutput . "\n" . $renewStderr);
         if (!($renew['success'] ?? false)) {
+            if ($this->isTxtMismatchError($renewCombined)) {
+                $order->save([
+                    'status' => 'dns_wait',
+                    'need_issue' => 0,
+                    'last_error' => 'TXT 记录在 CA 侧尚未生效，请等待 5~10 分钟后再点击验证。',
+                    'acme_output' => $renewCombined,
+                ]);
+                return false;
+            }
             $this->logDebug('acme_renew_failed', ['order_id' => $order['id']]);
             $this->recordAcmeFailure($order, $this->resolveAcmeError($renewStderr, $renewOutput), [
-                'acme_output' => $renewOutput,
+                'acme_output' => $renewCombined,
             ]);
             return false;
         }
@@ -777,10 +787,11 @@ class CertService
 
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
+        $installCombined = trim($installOutput . "\n" . $installStderr);
         if (!($install['success'] ?? false)) {
             $this->logDebug('acme_install_failed', ['order_id' => $order['id']]);
             $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
-                'acme_output' => $installOutput,
+                'acme_output' => $installCombined,
             ]);
             return false;
         }
@@ -791,7 +802,7 @@ class CertService
             'key_path' => $exportPath . 'key.key',
             'fullchain_path' => $exportPath . 'fullchain.cer',
             'last_error' => '',
-            'acme_output' => trim($renewOutput . "\n" . $installOutput),
+            'acme_output' => trim($renewCombined . "\n" . $installCombined),
             'need_issue' => 0,
             'need_install' => 0,
             'retry_count' => 0,
@@ -1115,9 +1126,13 @@ class CertService
     private function formatTxtRecordBlock(string $domain, string $host, array $values): string
     {
         $recordName = $this->normalizeTxtHost($domain, $host);
+        $valueCount = count($values);
         $message = "\n<b>记录名（主机记录）</b>\n<pre>_acme-challenge</pre>\n";
         $message .= "<b>记录类型</b>\n<pre>TXT</pre>\n";
         $message .= "<b>记录值</b>\n<pre>" . implode("\n", $values) . "</pre>\n";
+        if ($valueCount > 1) {
+            $message .= "⚠️ 当前需要添加 <b>{$valueCount}</b> 条 TXT 记录值，请全部添加后再验证。\n";
+        }
         $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
     }
@@ -1231,6 +1246,12 @@ class CertService
         }
 
         return [];
+    }
+
+    private function isTxtMismatchError(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'incorrect txt record') !== false;
     }
 
     private function isOrderStale(CertOrder $order, int $minutes = 30): bool
