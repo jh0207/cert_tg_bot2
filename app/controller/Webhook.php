@@ -17,6 +17,12 @@ class Webhook
 
         $this->sendFastResponse();
 
+        $response = json(['ok' => true]);
+        if (function_exists('fastcgi_finish_request')) {
+            $response->send();
+            fastcgi_finish_request();
+        }
+
         $bot = new Bot(new TelegramService());
         if (is_array($data)) {
             $bot->handleUpdate($data);
