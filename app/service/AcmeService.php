@@ -8,6 +8,7 @@ class AcmeService
     private string $exportPath;
     private string $acmeServer;
     private string $logFile;
+    private int $timeoutSeconds = 180;
 
     public function __construct()
     {
@@ -24,6 +25,8 @@ class AcmeService
             $this->acmePath,
             '--issue',
             '--dns',
+            '--server',
+            $this->acmeServer,
             '--yes-I-know-dns-manual-mode-enough-go-ahead-please',
         ];
         foreach ($this->normalizeDomains($domains) as $domain) {
@@ -40,6 +43,8 @@ class AcmeService
             $this->acmePath,
             '--issue',
             '--dns',
+            '--server',
+            $this->acmeServer,
             '--force',
             '--yes-I-know-dns-manual-mode-enough-go-ahead-please',
         ];
@@ -107,21 +112,46 @@ class AcmeService
             return ['success' => false, 'output' => 'Failed to start acme.sh'];
         }
 
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        $stdout = '';
+        $stderr = '';
+        $timedOut = false;
+        $start = time();
+        while (true) {
+            $stdout .= (string) stream_get_contents($pipes[1]);
+            $stderr .= (string) stream_get_contents($pipes[2]);
+
+            $status = proc_get_status($process);
+            if (!$status['running']) {
+                break;
+            }
+            if ((time() - $start) >= $this->timeoutSeconds) {
+                $timedOut = true;
+                proc_terminate($process);
+                break;
+            }
+            usleep(100000);
+        }
+        $stdout .= (string) stream_get_contents($pipes[1]);
+        $stderr .= (string) stream_get_contents($pipes[2]);
         foreach ($pipes as $pipe) {
             fclose($pipe);
         }
 
         $exitCode = proc_close($process);
+        if ($timedOut) {
+            $exitCode = $exitCode === 0 ? 124 : $exitCode;
+        }
         $this->logAcme('acme_command_done', [
             'command' => $command,
             'exit_code' => $exitCode,
+            'timed_out' => $timedOut,
             'stdout' => trim($stdout),
             'stderr' => trim($stderr),
         ]);
         return [
-            'success' => $exitCode === 0,
+            'success' => $exitCode === 0 && !$timedOut,
             'output' => trim($stdout . "\n" . $stderr),
             'stdout' => trim($stdout),
             'stderr' => trim($stderr),
