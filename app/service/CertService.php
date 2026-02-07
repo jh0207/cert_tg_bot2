@@ -1144,6 +1144,7 @@ class CertService
     {
         $order = $this->normalizeOrderData($order);
         $exportPath = $this->getOrderExportPath($order);
+        $archiveName = $this->ensureCertificateArchive($order);
         $lines = [
             '下载文件：',
             "fullchain.cer -> {$this->buildDownloadUrl($order, 'fullchain.cer')}",
@@ -1151,12 +1152,18 @@ class CertService
             "key.key -> {$this->buildDownloadUrl($order, 'key.key')}",
             "ca.cer -> {$this->buildDownloadUrl($order, 'ca.cer')}",
         ];
+        if ($archiveName) {
+            $lines[] = "{$archiveName} -> {$this->buildDownloadUrl($order, $archiveName)}";
+        }
         $lines[] = '';
         $lines[] = '服务器路径：';
         $lines[] = "fullchain.cer -> {$exportPath}fullchain.cer";
         $lines[] = "cert.cer -> {$exportPath}cert.cer";
         $lines[] = "key.key -> {$exportPath}key.key";
         $lines[] = "ca.cer -> {$exportPath}ca.cer";
+        if ($archiveName) {
+            $lines[] = "{$archiveName} -> {$exportPath}{$archiveName}";
+        }
         return "<pre>" . implode("\n", $lines) . "</pre>";
     }
 
@@ -1257,8 +1264,9 @@ class CertService
         return strpos($output, 'incorrect txt record') !== false;
     }
 
-    private function isOrderStale(CertOrder $order, int $minutes = 30): bool
+    private function isOrderStale($order, int $minutes = 30): bool
     {
+        $order = $this->normalizeOrderData($order);
         if (empty($order['updated_at'])) {
             return false;
         }
@@ -1267,6 +1275,54 @@ class CertService
             return false;
         }
         return $updated < (time() - $minutes * 60);
+    }
+
+    private function ensureCertificateArchive($order): ?string
+    {
+        if (!class_exists(\ZipArchive::class)) {
+            return null;
+        }
+
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        if ($domain === '') {
+            return null;
+        }
+
+        $exportPath = $this->getOrderExportPath($order);
+        $files = ['fullchain.cer', 'cert.cer', 'key.key', 'ca.cer'];
+        $latestMtime = 0;
+        foreach ($files as $file) {
+            $path = $exportPath . $file;
+            if (!is_file($path)) {
+                return null;
+            }
+            $mtime = filemtime($path);
+            if ($mtime !== false) {
+                $latestMtime = max($latestMtime, $mtime);
+            }
+        }
+
+        $archiveName = "{$domain}.zip";
+        $archivePath = $exportPath . $archiveName;
+        if (is_file($archivePath)) {
+            $archiveMtime = filemtime($archivePath);
+            if ($archiveMtime !== false && $archiveMtime >= $latestMtime) {
+                return $archiveName;
+            }
+        }
+
+        $zip = new \ZipArchive();
+        if ($zip->open($archivePath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            return null;
+        }
+
+        foreach ($files as $file) {
+            $zip->addFile($exportPath . $file, $file);
+        }
+
+        $zip->close();
+        return $archiveName;
     }
 
     private function getTxtValues($order): array
