@@ -485,6 +485,8 @@ class Bot
             }
             $this->telegram->sendMessage($chatId, "❌ 操作失败：{$e->getMessage()}\n请稍后重试。", $this->buildMainMenuKeyboard());
         }
+
+        $this->telegram->sendMessage($chatId, '⚠️ 未识别的操作，请返回菜单重试。', $this->buildMainMenuKeyboard());
     }
 
     private function buildTypeKeyboard(int $orderId): array
