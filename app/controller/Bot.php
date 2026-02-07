@@ -40,7 +40,12 @@ class Bot
             return;
         }
 
-        $user = $this->auth->startUser($message['from']);
+        $this->auth->startUser($message['from']);
+        $userRecord = TgUser::where('tg_id', $message['from']['id'])->find();
+        if (!$userRecord) {
+            return;
+        }
+        $user = $userRecord->toArray();
         $domainInput = $this->extractCommandArgument($text, '/domain');
         if ($user['pending_action'] === 'await_domain') {
             if ($domainInput === null && strpos($text, '/') === 0) {
