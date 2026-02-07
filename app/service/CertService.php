@@ -216,7 +216,11 @@ class CertService
 
         $info = $this->readCertificateInfo($order['cert_path']);
         $typeText = $this->formatCertType($order['cert_type']);
+        $issuedAt = $order['updated_at'] ?? '';
         $message = "📄 证书类型：{$typeText}";
+        if ($issuedAt) {
+            $message .= "\n签发时间：{$issuedAt}";
+        }
         if ($info['expires_at']) {
             $message .= "\n有效期至：{$info['expires_at']}";
         }
@@ -237,9 +241,122 @@ class CertService
             return ['success' => false, 'message' => '⚠️ 证书尚未签发。'];
         }
 
-        $message = "✅ 证书已导出至服务器目录：\n{$this->getOrderExportPath($order)}\n\n";
+        $typeText = $this->formatCertType($order['cert_type']);
+        $issuedAt = $order['updated_at'] ?? '';
+        $message = "✅ 证书已签发\n证书类型：{$typeText}\n";
+        if ($issuedAt) {
+            $message .= "签发时间：{$issuedAt}\n";
+        }
+        $message .= "已导出至服务器目录：\n{$this->getOrderExportPath($order)}\n\n";
         $message .= $this->buildDownloadFilesMessage($order);
         return ['success' => true, 'message' => $message];
+    }
+
+    public function getDownloadFileInfo(int $userId, int $orderId, string $fileKey): array
+    {
+        $order = CertOrder::where('id', $orderId)
+            ->where('tg_user_id', $userId)
+            ->find();
+        if (!$order) {
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
+        }
+
+        if ($order['status'] !== 'issued') {
+            return ['success' => false, 'message' => '⚠️ 证书尚未签发。'];
+        }
+
+        $fileMap = [
+            'fullchain' => 'fullchain.pem',
+            'cert' => 'cert.pem',
+            'key' => 'privkey.pem',
+        ];
+        if (!isset($fileMap[$fileKey])) {
+            return ['success' => false, 'message' => '⚠️ 文件类型不正确。'];
+        }
+
+        $exportPath = $this->getOrderExportPath($order);
+        $filename = $fileMap[$fileKey];
+        $label = $fileKey === 'key' ? 'key' : "{$fileKey}.cer";
+        $message = "📥 {$label} 下载路径：\n{$exportPath}{$filename}";
+        return ['success' => true, 'message' => $message];
+    }
+
+    public function requestDomainInput(int $userId, int $orderId): array
+    {
+        $order = CertOrder::where('id', $orderId)
+            ->where('tg_user_id', $userId)
+            ->find();
+        if (!$order) {
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
+        }
+
+        if ($order['status'] !== 'created') {
+            return ['success' => false, 'message' => '⚠️ 当前状态不可提交域名。'];
+        }
+
+        if (!$order['cert_type']) {
+            return ['success' => false, 'message' => '⚠️ 请先选择证书类型。'];
+        }
+
+        $user = TgUser::where('id', $userId)->find();
+        if ($user) {
+            $user->save([
+                'pending_action' => 'await_domain',
+                'pending_order_id' => $orderId,
+            ]);
+        }
+
+        return ['success' => true, 'message' => '📝 请发送主域名，例如 <b>example.com</b>。'];
+    }
+
+    public function cancelOrder(int $userId, int $orderId): array
+    {
+        $order = CertOrder::where('id', $orderId)
+            ->where('tg_user_id', $userId)
+            ->find();
+        if (!$order) {
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
+        }
+
+        if ($order['status'] !== 'created') {
+            return ['success' => false, 'message' => '⚠️ 当前订单无法取消。'];
+        }
+
+        $user = TgUser::where('id', $userId)->find();
+        if ($user && $user['pending_order_id'] === $orderId) {
+            $user->save(['pending_action' => '', 'pending_order_id' => 0]);
+        }
+
+        $shouldRefund = $order['domain'] !== '' && !$this->isUnlimitedUser($user);
+        if ($shouldRefund && $user) {
+            $user->save(['apply_quota' => (int) $user['apply_quota'] + 1]);
+        }
+
+        $order->delete();
+        $this->log($userId, 'order_cancel', (string) $orderId);
+
+        return ['success' => true, 'message' => '✅ 订单已取消。'];
+    }
+
+    public function retryDnsChallenge(int $userId, int $orderId): array
+    {
+        $order = CertOrder::where('id', $orderId)
+            ->where('tg_user_id', $userId)
+            ->find();
+        if (!$order) {
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
+        }
+
+        if ($order['status'] !== 'created' || $order['domain'] === '') {
+            return ['success' => false, 'message' => '⚠️ 当前订单无需重新生成 DNS 记录。'];
+        }
+
+        $user = TgUser::where('id', $userId)->find();
+        if (!$user) {
+            return ['success' => false, 'message' => '❌ 用户不存在。'];
+        }
+
+        return $this->issueOrder($user, $order);
     }
 
     private function issueOrder($user, CertOrder $order): array
@@ -344,7 +461,8 @@ class CertService
 
         $info = $this->readCertificateInfo($exportPath . 'cert.pem');
         $typeText = $this->formatCertType($order['cert_type']);
-        $message = "🎉 <b>状态：issued（签发成功）</b>\n证书类型：{$typeText}\n";
+        $issuedAt = date('Y-m-d H:i:s');
+        $message = "🎉 <b>状态：issued（签发成功）</b>\n证书类型：{$typeText}\n签发时间：{$issuedAt}\n";
         $message .= "已导出到：{$exportPath}\n";
         $message .= $this->buildDownloadFilesMessage($order);
         if ($info['expires_at']) {
@@ -369,11 +487,12 @@ class CertService
             return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
-        return [
-            'success' => true,
-            'message' => $this->buildOrderStatusMessage($order, false),
-            'order' => $order,
-        ];
+        $message = $this->buildOrderStatusMessage($order, false);
+        if (!in_array($order['status'], ['dns_wait', 'issued'], true)) {
+            $message .= "\n\n⚠️ 该订单尚未完成，请继续下一步或取消订单。";
+        }
+
+        return ['success' => true, 'message' => $message, 'order' => $order];
     }
 
     public function statusByDomain(string $domain): array
@@ -468,7 +587,7 @@ class CertService
 
     private function hasQuota(TgUser $user): bool
     {
-        if (in_array($user['role'], ['owner', 'admin'], true)) {
+        if ($this->isUnlimitedUser($user)) {
             return true;
         }
 
@@ -487,7 +606,7 @@ class CertService
 
     private function quotaExhaustedMessage(TgUser $user): string
     {
-        if (in_array($user['role'], ['owner', 'admin'], true)) {
+        if ($this->isUnlimitedUser($user)) {
             return '✅ 管理员不受申请次数限制。';
         }
 
@@ -510,11 +629,9 @@ class CertService
         } elseif ($status === 'dns_verified') {
             $message .= "\n\n✅ <b>状态：dns_verified</b>\nDNS 已验证，点击「我已完成解析（验证）」继续签发证书。";
         } elseif ($status === 'created' && $order['domain'] === '') {
-            $message .= "\n\n📝 等待选择证书类型 / 提交主域名。";
+            $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交主域名。";
         } elseif ($status === 'created' && $order['domain'] !== '') {
-            if ($withTips) {
-                $message .= "\n\n⏳ 订单已创建，等待生成解析记录，请稍后点击“查询状态”获取 TXT 记录。";
-            }
+            $message .= "\n\n⚠️ 订单未完成，请继续生成 DNS TXT 记录或取消订单后重新申请。";
         } elseif ($status === 'issued') {
             $issuedAt = $order['updated_at'] ?? '';
             $message .= "\n\n🎉 <b>状态：issued</b>\n";
@@ -536,7 +653,8 @@ class CertService
         $keyboard = null;
 
         if ($status === 'created') {
-            $message .= "\n📝 等待选择证书类型 / 提交主域名。";
+            $message .= "\n📝 订单未完成，请继续下一步或取消。";
+            $keyboard = $this->buildCreatedKeyboard($order);
         } elseif ($status === 'dns_wait') {
             $message .= "\n🧾 请添加 TXT 记录后点击验证：\n";
             if ($order['txt_host'] && $order['txt_value']) {
@@ -569,8 +687,12 @@ class CertService
             $message .= "\n" . $this->buildDownloadFilesMessage($order);
             $keyboard = [
                 [
-                    ['text' => '查看证书', 'callback_data' => "info:{$order['id']}"],
-                    ['text' => '下载证书', 'callback_data' => "download:{$order['id']}"],
+                    ['text' => 'fullchain.cer', 'callback_data' => "file:fullchain:{$order['id']}"],
+                    ['text' => 'cert.cer', 'callback_data' => "file:cert:{$order['id']}"],
+                    ['text' => 'key', 'callback_data' => "file:key:{$order['id']}"],
+                ],
+                [
+                    ['text' => '查看证书信息', 'callback_data' => "info:{$order['id']}"],
                 ],
                 [
                     ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
@@ -586,13 +708,14 @@ class CertService
 
     private function formatTxtRecordBlock(string $domain, string $host, string $value): string
     {
+        $recordName = $this->normalizeTxtHost($domain, $host);
         $lines = [
-            "Host (主机记录): {$host}",
-            'Type (类型): TXT',
-            "Value (记录值): {$value}",
+            $recordName,
+            'TXT',
+            $value,
         ];
         $message = "<pre>" . implode("\n", $lines) . "</pre>";
-        $message .= "\n说明：请在 DNS 中添加 <b>{$domain}</b> 的 TXT 记录，主机记录通常是 <b>{$host}</b>。";
+        $message .= "\n说明：请在 DNS 中添加 TXT 记录，记录名通常是 <b>{$recordName}</b>。";
         return $message;
     }
 
@@ -606,6 +729,59 @@ class CertService
             "key -> {$exportPath}privkey.pem",
         ];
         return "<pre>" . implode("\n", $lines) . "</pre>";
+    }
+
+    private function buildCreatedKeyboard(CertOrder $order): array
+    {
+        $buttons = [];
+        $certTypeMissing = !$order['cert_type'] || !in_array($order['cert_type'], ['root', 'wildcard'], true);
+        if ($certTypeMissing) {
+            $buttons[] = [
+                ['text' => '选择证书类型', 'callback_data' => "created:type:{$order['id']}"],
+            ];
+        } else {
+            if ($order['domain'] === '') {
+                $buttons[] = [
+                    ['text' => '提交主域名', 'callback_data' => "created:domain:{$order['id']}"],
+                ];
+                $buttons[] = [
+                    ['text' => '重新选择证书类型', 'callback_data' => "created:type:{$order['id']}"],
+                ];
+            } else {
+                $buttons[] = [
+                    ['text' => '重新生成 DNS 记录', 'callback_data' => "created:retry:{$order['id']}"],
+                ];
+            }
+        }
+        $buttons[] = [
+            ['text' => '取消订单', 'callback_data' => "cancel:{$order['id']}"],
+        ];
+
+        return $buttons;
+    }
+
+    private function normalizeTxtHost(string $domain, string $host): string
+    {
+        $host = trim($host);
+        if ($host === '') {
+            return "_acme-challenge.{$domain}";
+        }
+
+        $normalizedHost = rtrim($host, '.');
+        if (strpos($normalizedHost, $domain) !== false) {
+            return $normalizedHost;
+        }
+
+        return "{$normalizedHost}.{$domain}";
+    }
+
+    private function isUnlimitedUser(?TgUser $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return in_array($user['role'], ['owner', 'admin'], true);
     }
 
     private function validateDomainByType(string $domain, ?string $certType): ?string
