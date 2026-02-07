@@ -163,6 +163,7 @@ class CertService
 
     public function submitDomain(int $userId, string $domain): array
     {
+        $domain = strip_tags($domain);
         $domain = strtolower(trim($domain));
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
@@ -178,8 +179,13 @@ class CertService
         }
 
         if (!$user['pending_order_id']) {
-            $user->save(['pending_action' => '', 'pending_order_id' => 0]);
-            return ['success' => false, 'message' => '⚠️ 没有待处理的订单，请先申请证书。'];
+            $fallback = $this->findLatestPendingDomainOrder($userId);
+            if ($fallback) {
+                $user->save(['pending_order_id' => $fallback['id']]);
+            } else {
+                $user->save(['pending_action' => '', 'pending_order_id' => 0]);
+                return ['success' => false, 'message' => '⚠️ 没有待处理的订单，请先申请证书。'];
+            }
         }
 
         $order = CertOrder::where('id', $user['pending_order_id'])
@@ -424,7 +430,7 @@ class CertService
 
     private function issueOrder($user, CertOrder $order): array
     {
-        if ($order['status'] !== 'created') {
+        if (!in_array($order['status'], ['created', 'dns_wait', 'failed'], true)) {
             return ['success' => false, 'message' => '⚠️ 当前订单状态不可生成 TXT。'];
         }
 
@@ -439,9 +445,22 @@ class CertService
             'need_install' => 0,
             'retry_count' => 0,
             'last_error' => '',
+            'txt_host' => '',
+            'txt_value' => '',
+            'txt_values_json' => '',
         ]);
 
         $this->log($user['id'], 'order_create', $domain);
+
+        $this->processDnsGenerationOrder($order);
+        $latest = CertOrder::where('id', $order['id'])->find();
+        if ($latest && $latest['status'] === 'dns_wait') {
+            return [
+                'success' => true,
+                'message' => $this->buildOrderStatusMessage($latest, true),
+                'order' => $latest,
+            ];
+        }
 
         return [
             'success' => true,
@@ -511,6 +530,16 @@ class CertService
                 'need_issue' => 1,
                 'retry_count' => 0,
             ]);
+            $this->processIssueOrder($order);
+            $latest = CertOrder::where('id', $order['id'])->find();
+            if ($latest) {
+                $latestOrder = $latest->toArray();
+                return [
+                    'success' => true,
+                    'message' => $this->buildOrderStatusMessage($latestOrder, true),
+                    'order' => $latestOrder,
+                ];
+            }
             $message = "✅ <b>状态：dns_verified（DNS 已验证）</b>\n";
             $message .= "正在签发，请稍候查看状态。";
             return ['success' => true, 'message' => $message, 'order' => $order];
@@ -639,50 +668,58 @@ class CertService
 
         $processed = 0;
         foreach ($orders as $order) {
-            $processed++;
-            $domains = $this->getAcmeDomains($order);
-            $this->logDebug('acme_issue_start', ['domains' => $domains, 'order_id' => $order['id']]);
-            try {
-                $result = $this->acme->issueDns($domains);
-            } catch (\Throwable $e) {
-                $this->logDebug('acme_issue_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $e->getMessage(), [
-                    'acme_output' => $e->getMessage(),
-                ]);
-                continue;
+            if ($this->processDnsGenerationOrder($order)) {
+                $processed++;
             }
-
-            $stderr = $result['stderr'] ?? '';
-            $output = $result['output'] ?? '';
-            if (!($result['success'] ?? false)) {
-                $this->logDebug('acme_issue_failed', ['order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $this->resolveAcmeError($stderr, $output), [
-                    'acme_output' => $output,
-                ]);
-                continue;
-            }
-
-            $txt = $this->dns->parseTxtRecords($output);
-            if (!$txt) {
-                $this->recordAcmeFailure($order, '无法解析 TXT 记录，请检查 acme.sh 输出。', [
-                    'acme_output' => $output,
-                ]);
-                continue;
-            }
-
-            $txtValues = $txt['values'] ?? [];
-            $this->updateOrderStatus($order['tg_user_id'], $order, 'dns_wait', [
-                'txt_host' => $txt['host'] ?? '',
-                'txt_value' => $txtValues !== [] ? $txtValues[0] : '',
-                'txt_values_json' => json_encode($txtValues, JSON_UNESCAPED_UNICODE),
-                'acme_output' => $output,
-                'last_error' => '',
-                'need_dns_generate' => 0,
-                'retry_count' => 0,
-            ]);
         }
 
         return ['processed' => $processed];
+    }
+
+    private function processDnsGenerationOrder(CertOrder $order): bool
+    {
+        $domains = $this->getAcmeDomains($order);
+        $this->logDebug('acme_issue_start', ['domains' => $domains, 'order_id' => $order['id']]);
+        try {
+            $result = $this->acme->issueDns($domains);
+        } catch (\Throwable $e) {
+            $this->logDebug('acme_issue_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $e->getMessage(), [
+                'acme_output' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        $stderr = $result['stderr'] ?? '';
+        $output = $result['output'] ?? '';
+        $combinedOutput = trim($output . "\n" . $stderr);
+        $txt = $this->dns->parseTxtRecords($combinedOutput);
+        if (!$txt) {
+            if (!($result['success'] ?? false)) {
+                $this->logDebug('acme_issue_failed', ['order_id' => $order['id']]);
+                $this->recordAcmeFailure($order, $this->resolveAcmeError($stderr, $output), [
+                    'acme_output' => $combinedOutput,
+                ]);
+                return false;
+            }
+            $this->recordAcmeFailure($order, '无法解析 TXT 记录，请检查 acme.sh 输出。', [
+                'acme_output' => $combinedOutput,
+            ]);
+            return false;
+        }
+
+        $txtValues = $txt['values'] ?? [];
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'dns_wait', [
+            'txt_host' => $txt['host'] ?? '',
+            'txt_value' => $txtValues !== [] ? $txtValues[0] : '',
+            'txt_values_json' => json_encode($txtValues, JSON_UNESCAPED_UNICODE),
+            'acme_output' => $combinedOutput,
+            'last_error' => '',
+            'need_dns_generate' => 0,
+            'retry_count' => 0,
+        ]);
+
+        return true;
     }
 
     private function processIssueOrders(int $limit): array
@@ -695,65 +732,83 @@ class CertService
 
         $processed = 0;
         foreach ($orders as $order) {
-            $processed++;
-            $domains = $this->getAcmeDomains($order);
-            $this->logDebug('acme_renew_start', ['domains' => $domains, 'order_id' => $order['id']]);
-            try {
-                $renew = $this->acme->renew($domains);
-            } catch (\Throwable $e) {
-                $this->logDebug('acme_renew_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $e->getMessage(), [
-                    'acme_output' => $e->getMessage(),
-                ]);
-                continue;
+            if ($this->processIssueOrder($order)) {
+                $processed++;
             }
-
-            $renewStderr = $renew['stderr'] ?? '';
-            $renewOutput = $renew['output'] ?? '';
-            if (!($renew['success'] ?? false)) {
-                $this->logDebug('acme_renew_failed', ['order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $this->resolveAcmeError($renewStderr, $renewOutput), [
-                    'acme_output' => $renewOutput,
-                ]);
-                continue;
-            }
-
-            $this->logDebug('acme_install_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
-            try {
-                $install = $this->acme->installCert($order['domain']);
-            } catch (\Throwable $e) {
-                $this->logDebug('acme_install_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $e->getMessage(), [
-                    'acme_output' => $e->getMessage(),
-                ]);
-                continue;
-            }
-
-            $installStderr = $install['stderr'] ?? '';
-            $installOutput = $install['output'] ?? '';
-            if (!($install['success'] ?? false)) {
-                $this->logDebug('acme_install_failed', ['order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
-                    'acme_output' => $installOutput,
-                ]);
-                continue;
-            }
-
-            $exportPath = $this->getOrderExportPath($order);
-            $this->updateOrderStatus($order['tg_user_id'], $order, 'issued', [
-                'cert_path' => $exportPath . 'cert.cer',
-                'key_path' => $exportPath . 'key.key',
-                'fullchain_path' => $exportPath . 'fullchain.cer',
-                'last_error' => '',
-                'acme_output' => trim($renewOutput . "\n" . $installOutput),
-                'need_issue' => 0,
-                'need_install' => 0,
-                'retry_count' => 0,
-            ]);
-            $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
         }
 
         return ['processed' => $processed];
+    }
+
+    private function processIssueOrder(CertOrder $order): bool
+    {
+        $domains = $this->getAcmeDomains($order);
+        $this->logDebug('acme_renew_start', ['domains' => $domains, 'order_id' => $order['id']]);
+        try {
+            $renew = $this->acme->renew($domains);
+        } catch (\Throwable $e) {
+            $this->logDebug('acme_renew_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $e->getMessage(), [
+                'acme_output' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        $renewStderr = $renew['stderr'] ?? '';
+        $renewOutput = $renew['output'] ?? '';
+        $renewCombined = trim($renewOutput . "\n" . $renewStderr);
+        if (!($renew['success'] ?? false)) {
+            if ($this->isTxtMismatchError($renewCombined)) {
+                $order->save([
+                    'status' => 'dns_wait',
+                    'need_issue' => 0,
+                    'last_error' => 'TXT 记录在 CA 侧尚未生效，请等待 5~10 分钟后再点击验证。',
+                    'acme_output' => $renewCombined,
+                ]);
+                return false;
+            }
+            $this->logDebug('acme_renew_failed', ['order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $this->resolveAcmeError($renewStderr, $renewOutput), [
+                'acme_output' => $renewCombined,
+            ]);
+            return false;
+        }
+
+        $this->logDebug('acme_install_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
+        try {
+            $install = $this->acme->installCert($order['domain']);
+        } catch (\Throwable $e) {
+            $this->logDebug('acme_install_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $e->getMessage(), [
+                'acme_output' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        $installStderr = $install['stderr'] ?? '';
+        $installOutput = $install['output'] ?? '';
+        $installCombined = trim($installOutput . "\n" . $installStderr);
+        if (!($install['success'] ?? false)) {
+            $this->logDebug('acme_install_failed', ['order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
+                'acme_output' => $installCombined,
+            ]);
+            return false;
+        }
+
+        $exportPath = $this->getOrderExportPath($order);
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'issued', [
+            'cert_path' => $exportPath . 'cert.cer',
+            'key_path' => $exportPath . 'key.key',
+            'fullchain_path' => $exportPath . 'fullchain.cer',
+            'last_error' => '',
+            'acme_output' => trim($renewCombined . "\n" . $installCombined),
+            'need_issue' => 0,
+            'need_install' => 0,
+            'retry_count' => 0,
+        ]);
+        $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
+        return true;
     }
 
     private function processInstallOrders(int $limit): array
@@ -849,10 +904,11 @@ class CertService
         return [$order['domain']];
     }
 
-    private function getOrderExportPath(CertOrder $order): string
+    private function getOrderExportPath($order): string
     {
+        $order = $this->normalizeOrderData($order);
         $config = config('tg');
-        return rtrim($config['cert_export_path'], '/') . '/' . $order['domain'] . '/';
+        return rtrim($config['cert_export_path'], '/') . '/' . ($order['domain'] ?? '') . '/';
     }
 
     private function getDownloadBaseUrl(): string
@@ -909,24 +965,27 @@ class CertService
         return "🚫 <b>申请次数不足</b>（剩余 {$quota} 次）。请联系管理员添加次数。";
     }
 
-    private function buildOrderStatusMessage(CertOrder $order, bool $withTips): string
+    private function buildOrderStatusMessage($order, bool $withTips): string
     {
-        $status = $order['status'];
-        $domain = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
-        $typeText = $order['cert_type'] ? $this->formatCertType($order['cert_type']) : '（未选择）';
-        $message = "📌 当前状态：<b>{$status}</b>\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>";
+        $order = $this->normalizeOrderData($order);
+        $status = $order['status'] ?? '';
+        $statusLabel = $this->formatStatusLabel($status);
+        $domain = ($order['domain'] ?? '') !== '' ? $order['domain'] : '（未提交域名）';
+        $typeText = ($order['cert_type'] ?? '') ? $this->formatCertType($order['cert_type']) : '（未选择）';
+        $message = "📌 当前状态：<b>{$statusLabel}</b>\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>";
 
         if ($status === 'dns_wait') {
-            $message .= "\n\n🧾 <b>状态：dns_wait</b>\n请添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n";
+            $message .= "\n\n🧾 <b>状态：dns_wait（等待添加 DNS 记录）</b>\n";
+            $message .= "请添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n";
             $txtValues = $this->getTxtValues($order);
-            if ($order['txt_host'] && $txtValues !== []) {
-                $message .= $this->formatTxtRecordBlock($order['domain'], $order['txt_host'], $txtValues);
+            if (($order['txt_host'] ?? '') && $txtValues !== []) {
+                $message .= $this->formatTxtRecordBlock($order['domain'] ?? '', $order['txt_host'], $txtValues);
             }
         } elseif ($status === 'dns_verified') {
-            $message .= "\n\n✅ <b>状态：dns_verified</b>\nDNS 已验证，正在签发，请稍后查看状态。";
-        } elseif ($status === 'created' && $order['domain'] === '') {
+            $message .= "\n\n✅ <b>状态：dns_verified（DNS 已验证，正在签发）</b>\n请稍后刷新状态。";
+        } elseif ($status === 'created' && ($order['domain'] ?? '') === '') {
             $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交主域名。";
-        } elseif ($status === 'created' && $order['domain'] !== '') {
+        } elseif ($status === 'created' && ($order['domain'] ?? '') !== '') {
             if ((int) ($order['need_dns_generate'] ?? 0) === 1) {
                 $message .= "\n\n⏳ DNS 记录生成任务已提交，稍后展示 TXT。";
             } else {
@@ -962,7 +1021,8 @@ class CertService
         $status = $order['status'];
         $domain = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
         $typeText = $order['cert_type'] ? $this->formatCertType($order['cert_type']) : '（未选择）';
-        $message = "🔖 订单 #{$order['id']}\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>\n状态：<b>{$status}</b>";
+        $statusLabel = $this->formatStatusLabel($status);
+        $message = "🔖 订单 #{$order['id']}\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>\n状态：<b>{$statusLabel}</b>";
         $keyboard = null;
 
         if ($status === 'created') {
@@ -1066,19 +1126,20 @@ class CertService
     private function formatTxtRecordBlock(string $domain, string $host, array $values): string
     {
         $recordName = $this->normalizeTxtHost($domain, $host);
-        $lines = [
-            "记录名：{$recordName}",
-        ];
-        foreach ($values as $value) {
-            $lines[] = "TXT 值：{$value}";
+        $valueCount = count($values);
+        $message = "\n<b>记录名（主机记录）</b>\n<pre>_acme-challenge</pre>\n";
+        $message .= "<b>记录类型</b>\n<pre>TXT</pre>\n";
+        $message .= "<b>记录值</b>\n<pre>" . implode("\n", $values) . "</pre>\n";
+        if ($valueCount > 1) {
+            $message .= "⚠️ 当前需要添加 <b>{$valueCount}</b> 条 TXT 记录值，请全部添加后再验证。\n";
         }
-        $message = "<pre>" . implode("\n", $lines) . "</pre>";
-        $message .= "\n说明：请在 DNS 中添加 TXT 记录，记录名通常是 <b>{$recordName}</b>，通配符证书可能需要添加多个 TXT 值。";
+        $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
     }
 
-    private function buildDownloadFilesMessage(CertOrder $order): string
+    private function buildDownloadFilesMessage($order): string
     {
+        $order = $this->normalizeOrderData($order);
         $exportPath = $this->getOrderExportPath($order);
         $lines = [
             '下载文件：',
@@ -1096,10 +1157,11 @@ class CertService
         return "<pre>" . implode("\n", $lines) . "</pre>";
     }
 
-    private function buildDownloadUrl(CertOrder $order, string $filename): string
+    private function buildDownloadUrl($order, string $filename): string
     {
+        $order = $this->normalizeOrderData($order);
         $base = rtrim($this->getDownloadBaseUrl(), '/');
-        return "{$base}/{$order['domain']}/{$filename}";
+        return "{$base}/" . ($order['domain'] ?? '') . "/{$filename}";
     }
 
     private function buildCreatedKeyboard(CertOrder $order): array
@@ -1149,6 +1211,49 @@ class CertService
         return "{$normalizedHost}.{$domain}";
     }
 
+    private function formatStatusLabel(string $status): string
+    {
+        $map = [
+            'created' => 'created（待完善）',
+            'dns_wait' => 'dns_wait（等待添加 DNS 记录）',
+            'dns_verified' => 'dns_verified（DNS 已验证）',
+            'issued' => 'issued（已签发）',
+            'failed' => 'failed（处理失败）',
+        ];
+
+        return $map[$status] ?? $status;
+    }
+
+    private function normalizeOrderData($order): array
+    {
+        if (is_array($order)) {
+            return $order;
+        }
+
+        if (is_object($order)) {
+            if (method_exists($order, 'toArray')) {
+                $array = $order->toArray();
+                return is_array($array) ? $array : [];
+            }
+
+            if ($order instanceof \ArrayAccess) {
+                $array = [];
+                foreach ($order as $key => $value) {
+                    $array[$key] = $value;
+                }
+                return $array;
+            }
+        }
+
+        return [];
+    }
+
+    private function isTxtMismatchError(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'incorrect txt record') !== false;
+    }
+
     private function isOrderStale(CertOrder $order, int $minutes = 30): bool
     {
         if (empty($order['updated_at'])) {
@@ -1161,8 +1266,9 @@ class CertService
         return $updated < (time() - $minutes * 60);
     }
 
-    private function getTxtValues(CertOrder $order): array
+    private function getTxtValues($order): array
     {
+        $order = $this->normalizeOrderData($order);
         $values = [];
         if (!empty($order['txt_values_json'])) {
             $decoded = json_decode($order['txt_values_json'], true);
