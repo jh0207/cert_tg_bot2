@@ -775,16 +775,8 @@ class CertService
         }
 
         $this->logDebug('acme_install_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
-        try {
-            $install = $this->acme->installCert($order['domain']);
-        } catch (\Throwable $e) {
-            $this->logDebug('acme_install_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
-            $this->recordAcmeFailure($order, $e->getMessage(), [
-                'acme_output' => $e->getMessage(),
-            ]);
-            return false;
-        }
-
+        $installCombined = '';
+        $install = $this->acme->installCert($order['domain']);
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
@@ -793,7 +785,12 @@ class CertService
             $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
                 'acme_output' => $installCombined,
             ]);
-            return false;
+            $fallback = $this->acme->exportExistingCert($order['domain']);
+            if (!($fallback['success'] ?? false)) {
+                $this->logDebug('acme_export_failed', ['order_id' => $order['id'], 'output' => $fallback['output'] ?? '']);
+                return false;
+            }
+            $installCombined = trim($installCombined . "\n" . ($fallback['output'] ?? ''));
         }
 
         $exportPath = $this->getOrderExportPath($order);

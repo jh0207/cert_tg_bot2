@@ -98,6 +98,59 @@ class AcmeService
         ]);
     }
 
+    public function exportExistingCert(string $domain): array
+    {
+        $this->ensureExportDir($domain);
+        $sourceDir = $this->resolveAcmeCertDir($domain);
+        if (!is_dir($sourceDir)) {
+            return [
+                'success' => false,
+                'output' => "acme cert dir not found: {$sourceDir}",
+                'stdout' => '',
+                'stderr' => '',
+            ];
+        }
+
+        $mapping = [
+            'cert.cer' => $sourceDir . DIRECTORY_SEPARATOR . "{$domain}.cer",
+            'key.key' => $sourceDir . DIRECTORY_SEPARATOR . "{$domain}.key",
+            'ca.cer' => $sourceDir . DIRECTORY_SEPARATOR . 'ca.cer',
+            'fullchain.cer' => $sourceDir . DIRECTORY_SEPARATOR . 'fullchain.cer',
+        ];
+        $targets = [
+            'cert.cer' => $this->exportPath . $domain . '/cert.cer',
+            'key.key' => $this->exportPath . $domain . '/key.key',
+            'ca.cer' => $this->exportPath . $domain . '/ca.cer',
+            'fullchain.cer' => $this->exportPath . $domain . '/fullchain.cer',
+        ];
+
+        foreach ($mapping as $key => $path) {
+            if (!is_file($path)) {
+                return [
+                    'success' => false,
+                    'output' => "acme cert file missing: {$path}",
+                    'stdout' => '',
+                    'stderr' => '',
+                ];
+            }
+            if (!@copy($path, $targets[$key])) {
+                return [
+                    'success' => false,
+                    'output' => "failed to copy {$path} to {$targets[$key]}",
+                    'stdout' => '',
+                    'stderr' => '',
+                ];
+            }
+        }
+
+        return [
+            'success' => true,
+            'output' => 'acme cert exported from existing files',
+            'stdout' => '',
+            'stderr' => '',
+        ];
+    }
+
     private function run(array $args): array
     {
         $safeArgs = array_map('escapeshellarg', $args);
@@ -196,5 +249,14 @@ class AcmeService
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
+    }
+
+    private function resolveAcmeCertDir(string $domain): string
+    {
+        $home = getenv('HOME');
+        if (!$home) {
+            $home = function_exists('root_path') ? root_path() : dirname(__DIR__, 2);
+        }
+        return rtrim($home, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.acme.sh' . DIRECTORY_SEPARATOR . $domain . '_ecc';
     }
 }
