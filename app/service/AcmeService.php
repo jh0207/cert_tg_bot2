@@ -32,6 +32,23 @@ class AcmeService
         return $this->run($args);
     }
 
+    public function issueDns($domains): array
+    {
+        $args = [
+            $this->acmePath,
+            '--issue',
+            '--dns',
+            '--force',
+            '--yes-I-know-dns-manual-mode-enough-go-ahead-please',
+        ];
+        foreach ($this->normalizeDomains($domains) as $domain) {
+            $args[] = '-d';
+            $args[] = $domain;
+        }
+
+        return $this->run($args);
+    }
+
     public function renew($domains): array
     {
         $args = [
@@ -96,6 +113,8 @@ class AcmeService
         return [
             'success' => $exitCode === 0,
             'output' => trim($stdout . "\n" . $stderr),
+            'stdout' => trim($stdout),
+            'stderr' => trim($stderr),
         ];
     }
 

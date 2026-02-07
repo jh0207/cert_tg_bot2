@@ -4,4 +4,11 @@ ALTER TABLE `tg_users`
 
 ALTER TABLE `cert_orders`
   ADD COLUMN IF NOT EXISTS `txt_values_json` TEXT NULL AFTER `txt_value`,
-  ADD COLUMN IF NOT EXISTS `last_error` TEXT NULL AFTER `acme_output`;
+  ADD COLUMN IF NOT EXISTS `last_error` TEXT NULL AFTER `acme_output`,
+  ADD COLUMN IF NOT EXISTS `need_dns_generate` TINYINT(1) NOT NULL DEFAULT 0 AFTER `last_error`,
+  ADD COLUMN IF NOT EXISTS `need_issue` TINYINT(1) NOT NULL DEFAULT 0 AFTER `need_dns_generate`,
+  ADD COLUMN IF NOT EXISTS `need_install` TINYINT(1) NOT NULL DEFAULT 0 AFTER `need_issue`,
+  ADD COLUMN IF NOT EXISTS `retry_count` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `need_install`;
+
+ALTER TABLE `cert_orders`
+  MODIFY COLUMN `status` ENUM('created','dns_wait','dns_verified','issued','failed') NOT NULL DEFAULT 'created';

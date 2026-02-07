@@ -10,6 +10,7 @@ return [
     'owner_lock' => $ownerLock === null ? true : filter_var($ownerLock, FILTER_VALIDATE_BOOLEAN),
     'acme_path' => env_value('ACME_PATH', '/root/.acme.sh/acme.sh'),
     'acme_server' => env_value('ACME_SERVER', 'letsencrypt'),
+    'acme_retry_limit' => (int) env_value('ACME_RETRY_LIMIT', 3),
     'cert_export_path' => env_value('CERT_EXPORT_PATH', '/www/wwwroot/cert.com/ssl/'),
     'cert_download_base_url' => env_value('CERT_DOWNLOAD_BASE_URL', 'https://cert.com/ssl'),
 ];

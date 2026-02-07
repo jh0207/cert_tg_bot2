@@ -88,15 +88,15 @@ class Bot
                     '',
                     '📌 <b>常用按钮</b>',
                     '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                    'created 阶段：选择证书类型、提交主域名、生成 DNS 记录、取消订单',
+                    'created 阶段：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
                     'dns_wait 阶段：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                    'dns_verified 阶段：🚀 立即签发',
+                    'dns_verified 阶段：等待后台签发 / 刷新状态',
                     'issued 阶段：下载文件、查看证书信息、查看文件路径/重新导出',
                     '',
                     '📌 <b>状态说明</b>',
                     'created：订单未完成，需选择证书类型并提交主域名。',
                     'dns_wait：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
-                    'dns_verified：DNS 已验证，点击验证继续签发。',
+                    'dns_verified：DNS 已验证，系统自动签发，等待完成。',
                     'issued：证书已签发，可下载文件。',
                 ]);
                 $this->telegram->sendMessage($chatId, $help, $this->buildMainMenuKeyboard());
@@ -106,14 +106,14 @@ class Bot
                     '',
                     '📌 <b>常用按钮</b>',
                     '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                    'created：选择证书类型、提交主域名、生成 DNS 记录、取消订单',
+                    'created：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
                     'dns_wait：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                    'dns_verified：🚀 立即签发',
+                    'dns_verified：🔄 刷新状态',
                     'issued：下载文件、查看证书信息、查看文件路径/重新导出',
                     '',
                     'created：请选择证书类型并提交主域名。',
                     'dns_wait：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
-                    'dns_verified：DNS 已验证，继续点击验证完成签发。',
+                    'dns_verified：DNS 已验证，系统自动签发，请稍后刷新状态。',
                     'issued：证书已签发，使用下方按钮下载。',
                     '',
                     '提示：任何时候都可以通过订单列表继续或取消订单。',
@@ -146,7 +146,7 @@ class Bot
                 return;
             }
 
-            $this->sendProcessingMessage($chatId, '⏳ 正在生成 DNS 验证记录，请稍候…');
+            $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
             $result = $this->certService->createOrder($message['from'], $domainInput);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -310,7 +310,7 @@ class Bot
                     $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                     return;
                 }
-                $this->sendProcessingMessage($chatId, '⏳ 正在重新导出证书，请稍候…');
+                $this->sendProcessingMessage($chatId, '✅ 重新导出任务已提交，请稍后查看。');
                 $result = $this->certService->reinstallCert($userId, $orderId);
                 $keyboard = $this->buildIssuedKeyboard($orderId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -342,6 +342,18 @@ class Bot
                 return;
             }
 
+            if ($action === 'status') {
+                $userId = $this->getUserIdByTgId($from);
+                if (!$userId) {
+                    $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
+                    return;
+                }
+                $result = $this->certService->statusById($userId, $orderId);
+                $keyboard = $this->resolveOrderKeyboard($result);
+                $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
+                return;
+            }
+
             if ($action === 'created') {
                 $subAction = $parts[1] ?? '';
                 $userId = $this->getUserIdByTgId($from);
@@ -367,7 +379,7 @@ class Bot
                 }
 
                 if ($subAction === 'retry') {
-                    $this->sendProcessingMessage($chatId, '⏳ 正在生成 DNS 验证记录，请稍候…');
+                    $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
                     $result = $this->certService->retryDnsChallenge($userId, $orderId);
                     $keyboard = $this->resolveOrderKeyboard($result);
                     $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -424,15 +436,15 @@ class Bot
                             '',
                             '📌 <b>常用按钮</b>',
                             '🆕 申请证书 / 📂 我的订单 / 📖 使用帮助',
-                            'created 阶段：选择证书类型、提交主域名、生成 DNS 记录、取消订单',
+                            'created 阶段：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
                             'dns_wait 阶段：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                            'dns_verified 阶段：🚀 立即签发 / ❌ 取消订单',
+                            'dns_verified 阶段：等待后台签发 / 刷新状态',
                             'issued 阶段：下载文件、查看证书信息、重新导出',
                             '',
                             '📌 <b>状态说明</b>',
                             'created：订单未完成，需选择证书类型并提交主域名。',
                             'dns_wait：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
-                            'dns_verified：DNS 已验证，点击验证继续签发。',
+                            'dns_verified：DNS 已验证，系统自动签发，等待完成。',
                             'issued：证书已签发，可下载文件。',
                         ]);
                         $this->telegram->sendMessage($chatId, $help, $this->buildMainMenuKeyboard());
@@ -442,13 +454,13 @@ class Bot
                             "📖 <b>使用帮助</b>\n\n" .
                             "📌 <b>常用按钮</b>\n" .
                             "🆕 申请证书 / 📂 我的订单 / 📖 使用帮助\n" .
-                            "created：选择证书类型、提交主域名、生成 DNS 记录、取消订单\n" .
+                            "created：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单\n" .
                             "dns_wait：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单\n" .
-                            "dns_verified：🚀 立即签发 / ❌ 取消订单\n" .
+                            "dns_verified：🔄 刷新状态 / ❌ 取消订单\n" .
                             "issued：下载文件、查看证书信息、重新导出\n\n" .
                             "created：请选择证书类型并提交主域名。\n" .
                             "dns_wait：按提示添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n" .
-                            "dns_verified：DNS 已验证，继续点击「🚀 立即签发」完成签发。\n" .
+                            "dns_verified：DNS 已验证，系统自动签发，请稍后刷新状态。\n" .
                             "issued：证书已签发，使用下方按钮下载。\n\n" .
                             "提示：任何时候都可以通过订单列表继续或取消订单。",
                             $this->buildMainMenuKeyboard()
@@ -506,7 +518,7 @@ class Bot
         if ($status === 'dns_verified') {
             return [
                 [
-                    ['text' => '🚀 立即签发', 'callback_data' => "verify:{$orderId}"],
+                    ['text' => '🔄 刷新状态', 'callback_data' => "status:{$orderId}"],
                 ],
                 [
                     ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$orderId}"],
@@ -541,6 +553,18 @@ class Bot
                 ['text' => '选择证书类型', 'callback_data' => "created:type:{$orderId}"],
             ];
         } else {
+            if ((int) ($order['need_dns_generate'] ?? 0) === 1) {
+                $buttons[] = [
+                    ['text' => '🔄 刷新状态', 'callback_data' => "status:{$orderId}"],
+                ];
+                $buttons[] = [
+                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$orderId}"],
+                ];
+                $buttons[] = [
+                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
+                ];
+                return $buttons;
+            }
             if (($order['domain'] ?? '') === '') {
                 $buttons[] = [
                     ['text' => '提交主域名', 'callback_data' => "created:domain:{$orderId}"],
@@ -550,7 +574,7 @@ class Bot
                 ];
             } else {
                 $buttons[] = [
-                    ['text' => '生成 DNS 记录', 'callback_data' => "created:retry:{$orderId}"],
+                    ['text' => '提交生成 DNS 记录任务', 'callback_data' => "created:retry:{$orderId}"],
                 ];
             }
         }
@@ -579,6 +603,21 @@ class Bot
             ],
             [
                 ['text' => '重新导出', 'callback_data' => "reinstall:{$orderId}"],
+            ],
+            [
+                ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
+            ],
+        ];
+    }
+
+    private function buildFailedKeyboard(int $orderId): array
+    {
+        return [
+            [
+                ['text' => '🆕 重新申请证书', 'callback_data' => 'menu:new'],
+            ],
+            [
+                ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$orderId}"],
             ],
             [
                 ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
@@ -663,6 +702,10 @@ class Bot
             return $this->buildIssuedKeyboard($result['order']['id']);
         }
 
+        if ($status === 'failed') {
+            return $this->buildFailedKeyboard($result['order']['id']);
+        }
+
         return null;
     }
 
@@ -686,7 +729,7 @@ class Bot
             }
 
             $domain = $domainInput ?? $text;
-            $this->sendProcessingMessage($chatId, '⏳ 正在生成 DNS 验证记录，请稍候…');
+            $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
             $result = $this->certService->submitDomain($user['id'], $domain);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -733,7 +776,7 @@ class Bot
                 'order_id' => $order['id'],
                 'domain' => $domain,
             ]);
-            $this->sendProcessingMessage($chatId, '⏳ 正在生成 DNS 验证记录，请稍候…');
+            $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
             $result = $this->certService->submitDomain($user['id'], $domain);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -817,7 +860,7 @@ class Bot
     {
         $order = $this->certService->findOrderById($userId, $orderId);
         if ($order && $order['status'] === 'dns_verified') {
-            $this->sendProcessingMessage($chatId, '⏳ 正在签发证书，请稍候…');
+            $this->sendProcessingMessage($chatId, '⏳ 正在签发证书，请稍后刷新状态…');
             return;
         }
         $this->sendProcessingMessage($chatId, '⏳ 正在验证 DNS 解析，这可能需要几十秒…');
@@ -827,7 +870,7 @@ class Bot
     {
         $order = $this->certService->findOrderByDomain($userId, $domain);
         if ($order && $order['status'] === 'dns_verified') {
-            $this->sendProcessingMessage($chatId, '⏳ 正在签发证书，请稍候…');
+            $this->sendProcessingMessage($chatId, '⏳ 正在签发证书，请稍后刷新状态…');
             return;
         }
         $this->sendProcessingMessage($chatId, '⏳ 正在验证 DNS 解析，这可能需要几十秒…');
