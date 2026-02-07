@@ -7,3 +7,5 @@
 ```
 * * * * * php /www/wwwroot/tg-cert-bot/think cert:process
 ```
+
+默认导出目录位于站点 `public/ssl/`，可通过 `CERT_EXPORT_PATH` 覆盖。
