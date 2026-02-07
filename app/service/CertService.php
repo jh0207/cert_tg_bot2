@@ -446,6 +446,16 @@ class CertService
 
         $this->log($user['id'], 'order_create', $domain);
 
+        $this->processDnsGenerationOrder($order);
+        $latest = CertOrder::where('id', $order['id'])->find();
+        if ($latest && $latest['status'] === 'dns_wait') {
+            return [
+                'success' => true,
+                'message' => $this->buildOrderStatusMessage($latest, true),
+                'order' => $latest,
+            ];
+        }
+
         return [
             'success' => true,
             'message' => '✅ 任务已提交，稍后展示 DNS TXT 记录。',
@@ -642,50 +652,58 @@ class CertService
 
         $processed = 0;
         foreach ($orders as $order) {
-            $processed++;
-            $domains = $this->getAcmeDomains($order);
-            $this->logDebug('acme_issue_start', ['domains' => $domains, 'order_id' => $order['id']]);
-            try {
-                $result = $this->acme->issueDns($domains);
-            } catch (\Throwable $e) {
-                $this->logDebug('acme_issue_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $e->getMessage(), [
-                    'acme_output' => $e->getMessage(),
-                ]);
-                continue;
+            if ($this->processDnsGenerationOrder($order)) {
+                $processed++;
             }
-
-            $stderr = $result['stderr'] ?? '';
-            $output = $result['output'] ?? '';
-            if (!($result['success'] ?? false)) {
-                $this->logDebug('acme_issue_failed', ['order_id' => $order['id']]);
-                $this->recordAcmeFailure($order, $this->resolveAcmeError($stderr, $output), [
-                    'acme_output' => $output,
-                ]);
-                continue;
-            }
-
-            $txt = $this->dns->parseTxtRecords($output);
-            if (!$txt) {
-                $this->recordAcmeFailure($order, '无法解析 TXT 记录，请检查 acme.sh 输出。', [
-                    'acme_output' => $output,
-                ]);
-                continue;
-            }
-
-            $txtValues = $txt['values'] ?? [];
-            $this->updateOrderStatus($order['tg_user_id'], $order, 'dns_wait', [
-                'txt_host' => $txt['host'] ?? '',
-                'txt_value' => $txtValues !== [] ? $txtValues[0] : '',
-                'txt_values_json' => json_encode($txtValues, JSON_UNESCAPED_UNICODE),
-                'acme_output' => $output,
-                'last_error' => '',
-                'need_dns_generate' => 0,
-                'retry_count' => 0,
-            ]);
         }
 
         return ['processed' => $processed];
+    }
+
+    private function processDnsGenerationOrder(CertOrder $order): bool
+    {
+        $domains = $this->getAcmeDomains($order);
+        $this->logDebug('acme_issue_start', ['domains' => $domains, 'order_id' => $order['id']]);
+        try {
+            $result = $this->acme->issueDns($domains);
+        } catch (\Throwable $e) {
+            $this->logDebug('acme_issue_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $e->getMessage(), [
+                'acme_output' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        $stderr = $result['stderr'] ?? '';
+        $output = $result['output'] ?? '';
+        if (!($result['success'] ?? false)) {
+            $this->logDebug('acme_issue_failed', ['order_id' => $order['id']]);
+            $this->recordAcmeFailure($order, $this->resolveAcmeError($stderr, $output), [
+                'acme_output' => $output,
+            ]);
+            return false;
+        }
+
+        $txt = $this->dns->parseTxtRecords($output);
+        if (!$txt) {
+            $this->recordAcmeFailure($order, '无法解析 TXT 记录，请检查 acme.sh 输出。', [
+                'acme_output' => $output,
+            ]);
+            return false;
+        }
+
+        $txtValues = $txt['values'] ?? [];
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'dns_wait', [
+            'txt_host' => $txt['host'] ?? '',
+            'txt_value' => $txtValues !== [] ? $txtValues[0] : '',
+            'txt_values_json' => json_encode($txtValues, JSON_UNESCAPED_UNICODE),
+            'acme_output' => $output,
+            'last_error' => '',
+            'need_dns_generate' => 0,
+            'retry_count' => 0,
+        ]);
+
+        return true;
     }
 
     private function processIssueOrders(int $limit): array
