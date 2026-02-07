@@ -67,6 +67,13 @@ class Bot
             return;
         }
 
+        if ($user['pending_action'] === 'await_status_domain' && strpos($text, '/') !== 0) {
+            $result = $this->certService->status($message['from'], $text);
+            $this->clearPendingAction($user['id']);
+            $this->telegram->sendMessage($chatId, $result['message']);
+            return;
+        }
+
         if (strpos($text, '/start') === 0) {
             $role = $user['role'];
             $messageText = "👋 <b>欢迎使用证书机器人</b>\n";
