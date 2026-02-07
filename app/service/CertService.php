@@ -676,18 +676,18 @@ class CertService
 
         $stderr = $result['stderr'] ?? '';
         $output = $result['output'] ?? '';
-        if (!($result['success'] ?? false)) {
-            $this->logDebug('acme_issue_failed', ['order_id' => $order['id']]);
-            $this->recordAcmeFailure($order, $this->resolveAcmeError($stderr, $output), [
-                'acme_output' => $output,
-            ]);
-            return false;
-        }
-
-        $txt = $this->dns->parseTxtRecords($output);
+        $combinedOutput = trim($output . "\n" . $stderr);
+        $txt = $this->dns->parseTxtRecords($combinedOutput);
         if (!$txt) {
+            if (!($result['success'] ?? false)) {
+                $this->logDebug('acme_issue_failed', ['order_id' => $order['id']]);
+                $this->recordAcmeFailure($order, $this->resolveAcmeError($stderr, $output), [
+                    'acme_output' => $combinedOutput,
+                ]);
+                return false;
+            }
             $this->recordAcmeFailure($order, '无法解析 TXT 记录，请检查 acme.sh 输出。', [
-                'acme_output' => $output,
+                'acme_output' => $combinedOutput,
             ]);
             return false;
         }
@@ -697,7 +697,7 @@ class CertService
             'txt_host' => $txt['host'] ?? '',
             'txt_value' => $txtValues !== [] ? $txtValues[0] : '',
             'txt_values_json' => json_encode($txtValues, JSON_UNESCAPED_UNICODE),
-            'acme_output' => $output,
+            'acme_output' => $combinedOutput,
             'last_error' => '',
             'need_dns_generate' => 0,
             'retry_count' => 0,
