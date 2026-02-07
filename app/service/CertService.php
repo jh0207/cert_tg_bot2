@@ -30,6 +30,9 @@ class CertService
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
         }
+        if (!$this->hasQuota($user)) {
+            return ['success' => false, 'message' => $this->quotaExhaustedMessage($user)];
+        }
 
         $existing = CertOrder::where('domain', $domain)
             ->where('tg_user_id', $user['id'])
@@ -37,10 +40,18 @@ class CertService
             ->find();
         if ($existing) {
             if ($existing['status'] !== 'created') {
-                return ['success' => false, 'message' => '⚠️ 当前订单状态不可重复生成 TXT。'];
+                return [
+                    'success' => false,
+                    'message' => $this->buildOrderStatusMessage($existing, true),
+                    'order' => $existing,
+                ];
             }
 
-            return ['success' => false, 'message' => '⚠️ 该域名已有进行中的订单。'];
+            return [
+                'success' => false,
+                'message' => $this->buildOrderStatusMessage($existing, true),
+                'order' => $existing,
+            ];
         }
 
         $order = CertOrder::create([
@@ -48,6 +59,8 @@ class CertService
             'domain' => $domain,
             'status' => 'created',
         ]);
+
+        $this->consumeQuota($user);
 
         return $this->issueOrder($user, $order);
     }
@@ -57,6 +70,9 @@ class CertService
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
+        }
+        if (!$this->hasQuota($user)) {
+            return ['success' => false, 'message' => $this->quotaExhaustedMessage($user)];
         }
 
         $existing = CertOrder::where('tg_user_id', $user['id'])
@@ -118,6 +134,9 @@ class CertService
         if (!$user) {
             return ['success' => false, 'message' => '❌ 用户不存在。'];
         }
+        if (!$this->hasQuota($user)) {
+            return ['success' => false, 'message' => $this->quotaExhaustedMessage($user)];
+        }
 
         if (!$user['pending_order_id']) {
             return ['success' => false, 'message' => '⚠️ 没有待处理的订单，请先申请证书。'];
@@ -143,11 +162,16 @@ class CertService
             ->where('status', '<>', 'issued')
             ->find();
         if ($duplicate) {
-            return ['success' => false, 'message' => '⚠️ 该域名已有进行中的订单。'];
+            return [
+                'success' => false,
+                'message' => $this->buildOrderStatusMessage($duplicate, true),
+                'order' => $duplicate,
+            ];
         }
 
         $order->save(['domain' => $domain]);
         $user->save(['pending_action' => '', 'pending_order_id' => 0]);
+        $this->consumeQuota($user);
 
         return $this->issueOrder($user, $order);
     }
@@ -332,7 +356,7 @@ class CertService
             return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
-        return ['success' => true, 'message' => '📌 当前状态：<b>' . $order['status'] . '</b>'];
+        return ['success' => true, 'message' => $this->buildOrderStatusMessage($order, false)];
     }
 
     public function statusByDomain(string $domain): array
@@ -342,7 +366,30 @@ class CertService
             return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
-        return ['success' => true, 'message' => '📌 当前状态：<b>' . $order['status'] . '</b>'];
+        return ['success' => true, 'message' => $this->buildOrderStatusMessage($order, false)];
+    }
+
+    public function listOrders(array $from): array
+    {
+        $user = TgUser::where('tg_id', $from['id'])->find();
+        if (!$user) {
+            return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
+        }
+
+        $orders = CertOrder::where('tg_user_id', $user['id'])
+            ->order('id', 'desc')
+            ->select();
+        if (!$orders || count($orders) === 0) {
+            return ['success' => true, 'message' => '📂 暂无证书订单记录。'];
+        }
+
+        $lines = ["📂 <b>证书订单记录</b>"];
+        foreach ($orders as $order) {
+            $domainText = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
+            $lines[] = "• {$domainText} | <b>{$order['status']}</b>";
+        }
+
+        return ['success' => true, 'message' => implode("\n", $lines)];
     }
 
     private function log(int $userId, string $action, string $detail): void
@@ -391,5 +438,47 @@ class CertService
         }
 
         return ['expires_at' => date('Y-m-d H:i:s', $certData['validTo_time_t'])];
+    }
+
+    private function hasQuota(TgUser $user): bool
+    {
+        return (int) $user['apply_quota'] > 0;
+    }
+
+    private function consumeQuota(TgUser $user): void
+    {
+        $current = (int) $user['apply_quota'];
+        if ($current <= 0) {
+            return;
+        }
+
+        $user->save(['apply_quota' => $current - 1]);
+    }
+
+    private function quotaExhaustedMessage(TgUser $user): string
+    {
+        $quota = (int) $user['apply_quota'];
+        return "🚫 <b>申请次数不足</b>（剩余 {$quota} 次）。请联系管理员添加次数。";
+    }
+
+    private function buildOrderStatusMessage(CertOrder $order, bool $withTips): string
+    {
+        $status = $order['status'];
+        $domain = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
+        $message = "📌 当前状态：<b>{$status}</b>\n域名：<b>{$domain}</b>";
+
+        if ($status === 'dns_wait') {
+            $message .= "\n\n🧾 <b>请添加 TXT 记录</b> 后点击「我已完成解析」按钮进行验证。\n";
+            if ($order['txt_host'] && $order['txt_value']) {
+                $message .= "<pre>";
+                $message .= "域名 | 主机记录 | 类型 | 记录值\n";
+                $message .= "{$order['domain']} | {$order['txt_host']} | TXT | {$order['txt_value']}";
+                $message .= "</pre>";
+            }
+        } elseif ($status === 'created' && $order['domain'] === '' && $withTips) {
+            $message .= "\n\n📝 请先提交主域名，例如 <b>example.com</b>。";
+        }
+
+        return $message;
     }
 }

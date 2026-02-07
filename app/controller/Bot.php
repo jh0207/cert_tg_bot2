@@ -55,12 +55,15 @@ class Bot
 
             $domain = $domainInput ?? $text;
             $result = $this->certService->submitDomain($user['id'], $domain);
-            if ($result['success'] && isset($result['order'])) {
-                $keyboard = $this->buildDnsKeyboard($result['order']['id']);
-                $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
-            } else {
-                $this->telegram->sendMessage($chatId, $result['message']);
-            }
+            $keyboard = $this->resolveDnsKeyboard($result);
+            $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
+            return;
+        }
+
+        if ($user['pending_action'] === 'await_status_domain' && strpos($text, '/') !== 0) {
+            $result = $this->certService->status($message['from'], $text);
+            $this->clearPendingAction($user['id']);
+            $this->telegram->sendMessage($chatId, $result['message']);
             return;
         }
 
@@ -89,6 +92,7 @@ class Bot
                     '/domain example.com 快速申请根域名证书',
                     '/verify example.com DNS 解析完成后验证并签发',
                     '/status example.com 查看订单状态',
+                    '/quota add <tg_id> <次数> 追加申请次数',
                 ]);
                 $this->telegram->sendMessage($chatId, $help, $this->buildMainMenuKeyboard());
             } else {
@@ -121,12 +125,8 @@ class Bot
             }
 
             $result = $this->certService->createOrder($message['from'], $domainInput);
-            if ($result['success'] && isset($result['order'])) {
-                $keyboard = $this->buildDnsKeyboard($result['order']['id']);
-                $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
-            } else {
-                $this->telegram->sendMessage($chatId, $result['message']);
-            }
+            $keyboard = $this->resolveDnsKeyboard($result);
+            $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
             return;
         }
 
@@ -157,6 +157,40 @@ class Bot
                 $this->clearPendingAction($user['id']);
             }
             $this->telegram->sendMessage($chatId, $result['message']);
+            return;
+        }
+
+        if (strpos($text, '/quota') === 0) {
+            if (!$this->auth->isAdmin($message['from']['id'])) {
+                $this->telegram->sendMessage($chatId, '❌ 仅管理员可调整申请次数。');
+                return;
+            }
+
+            $parts = preg_split('/\s+/', trim($text));
+            if (count($parts) < 4 || $parts[1] !== 'add') {
+                $this->telegram->sendMessage($chatId, '⚠️ 用法：/quota add <tg_id> <次数>');
+                return;
+            }
+
+            $targetId = (int) $parts[2];
+            $amount = (int) $parts[3];
+            if ($targetId <= 0 || $amount <= 0) {
+                $this->telegram->sendMessage($chatId, '⚠️ tg_id 和次数必须是正整数。');
+                return;
+            }
+
+            $target = TgUser::where('tg_id', $targetId)->find();
+            if (!$target) {
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在。');
+                return;
+            }
+
+            $current = (int) $target['apply_quota'];
+            $target->save(['apply_quota' => $current + $amount]);
+            $this->telegram->sendMessage(
+                $chatId,
+                "✅ 已为用户 <b>{$targetId}</b> 增加 <b>{$amount}</b> 次申请额度（当前剩余 {$current + $amount} 次）。"
+            );
             return;
         }
 
@@ -280,6 +314,7 @@ class Bot
                         '/domain example.com 快速申请根域名证书',
                         '/verify example.com DNS 解析完成后验证并签发',
                         '/status example.com 查看订单状态',
+                        '/quota add <tg_id> <次数> 追加申请次数',
                     ]);
                     $this->telegram->answerCallbackQuery($callbackId, '帮助已发送');
                     $this->telegram->sendMessage($chatId, $help, $this->buildMainMenuKeyboard());
@@ -287,6 +322,13 @@ class Bot
                     $this->telegram->answerCallbackQuery($callbackId, '请使用按钮菜单');
                     $this->telegram->sendMessage($chatId, '✅ 请使用下方按钮菜单进行操作。', $this->buildMainMenuKeyboard());
                 }
+                return;
+            }
+
+            if ($menuAction === 'orders') {
+                $result = $this->certService->listOrders($from);
+                $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
+                $this->telegram->sendMessage($chatId, $result['message']);
                 return;
             }
         }
@@ -332,6 +374,7 @@ class Bot
                 ['text' => '🔎 查询状态', 'callback_data' => 'menu:status'],
             ],
             [
+                ['text' => '📂 订单记录', 'callback_data' => 'menu:orders'],
                 ['text' => '📖 使用帮助', 'callback_data' => 'menu:help'],
             ],
         ];
@@ -380,5 +423,19 @@ class Bot
         }
 
         return (int) $user['id'];
+    }
+
+    private function resolveDnsKeyboard(array $result): ?array
+    {
+        if (!isset($result['order'])) {
+            return null;
+        }
+
+        $status = $result['order']['status'] ?? '';
+        if ($status === 'dns_wait') {
+            return $this->buildDnsKeyboard($result['order']['id']);
+        }
+
+        return null;
     }
 }
