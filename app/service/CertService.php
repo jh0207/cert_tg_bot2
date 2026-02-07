@@ -23,12 +23,15 @@ class CertService
         $domain = strtolower(trim($domain));
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
-            return ['success' => false, 'message' => '域名格式错误'];
+            return ['success' => false, 'message' => '❌ 域名格式错误，请检查后重试。'];
         }
 
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
-            return ['success' => false, 'message' => '请先发送 /start 绑定账号'];
+            return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
+        }
+        if (!$this->hasQuota($user)) {
+            return ['success' => false, 'message' => $this->quotaExhaustedMessage($user)];
         }
 
         $existing = CertOrder::where('domain', $domain)
@@ -37,10 +40,18 @@ class CertService
             ->find();
         if ($existing) {
             if ($existing['status'] !== 'created') {
-                return ['success' => false, 'message' => '当前订单状态不可重复生成 TXT'];
+                return [
+                    'success' => false,
+                    'message' => $this->buildOrderStatusMessage($existing, true),
+                    'order' => $existing,
+                ];
             }
 
-            return ['success' => false, 'message' => '该域名已有进行中的订单'];
+            return [
+                'success' => false,
+                'message' => $this->buildOrderStatusMessage($existing, true),
+                'order' => $existing,
+            ];
         }
 
         $order = CertOrder::create([
@@ -49,6 +60,8 @@ class CertService
             'status' => 'created',
         ]);
 
+        $this->consumeQuota($user);
+
         return $this->issueOrder($user, $order);
     }
 
@@ -56,7 +69,10 @@ class CertService
     {
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
-            return ['success' => false, 'message' => '请先发送 /start 绑定账号'];
+            return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
+        }
+        if (!$this->hasQuota($user)) {
+            return ['success' => false, 'message' => $this->quotaExhaustedMessage($user)];
         }
 
         $existing = CertOrder::where('tg_user_id', $user['id'])
@@ -82,15 +98,15 @@ class CertService
             ->where('tg_user_id', $userId)
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
         if ($order['status'] !== 'created') {
-            return ['success' => false, 'message' => '当前状态不可选择类型'];
+            return ['success' => false, 'message' => '⚠️ 当前状态不可选择类型。'];
         }
 
         if (!in_array($certType, ['root', 'wildcard'], true)) {
-            return ['success' => false, 'message' => '证书类型不合法'];
+            return ['success' => false, 'message' => '❌ 证书类型不合法。'];
         }
 
         $order->save(['cert_type' => $certType]);
@@ -111,31 +127,34 @@ class CertService
         $domain = strtolower(trim($domain));
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
-            return ['success' => false, 'message' => '域名格式错误'];
+            return ['success' => false, 'message' => '❌ 域名格式错误，请检查后重试。'];
         }
 
         $user = TgUser::where('id', $userId)->find();
         if (!$user) {
-            return ['success' => false, 'message' => '用户不存在'];
+            return ['success' => false, 'message' => '❌ 用户不存在。'];
+        }
+        if (!$this->hasQuota($user)) {
+            return ['success' => false, 'message' => $this->quotaExhaustedMessage($user)];
         }
 
         if (!$user['pending_order_id']) {
-            return ['success' => false, 'message' => '没有待处理的订单'];
+            return ['success' => false, 'message' => '⚠️ 没有待处理的订单，请先申请证书。'];
         }
 
         $order = CertOrder::where('id', $user['pending_order_id'])
             ->where('tg_user_id', $userId)
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
         if ($order['status'] !== 'created') {
-            return ['success' => false, 'message' => '当前订单状态不可提交域名'];
+            return ['success' => false, 'message' => '⚠️ 当前订单状态不可提交域名。'];
         }
 
         if ($order['domain'] !== '') {
-            return ['success' => false, 'message' => '该订单已提交域名'];
+            return ['success' => false, 'message' => '⚠️ 该订单已提交域名。'];
         }
 
         $duplicate = CertOrder::where('domain', $domain)
@@ -143,11 +162,16 @@ class CertService
             ->where('status', '<>', 'issued')
             ->find();
         if ($duplicate) {
-            return ['success' => false, 'message' => '该域名已有进行中的订单'];
+            return [
+                'success' => false,
+                'message' => $this->buildOrderStatusMessage($duplicate, true),
+                'order' => $duplicate,
+            ];
         }
 
         $order->save(['domain' => $domain]);
         $user->save(['pending_action' => '', 'pending_order_id' => 0]);
+        $this->consumeQuota($user);
 
         return $this->issueOrder($user, $order);
     }
@@ -158,7 +182,7 @@ class CertService
             ->where('tg_user_id', $userId)
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
         return $this->verifyOrderByOrder($order);
@@ -170,16 +194,16 @@ class CertService
             ->where('tg_user_id', $userId)
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
         if ($order['status'] !== 'issued') {
-            return ['success' => false, 'message' => '证书尚未签发'];
+            return ['success' => false, 'message' => '⚠️ 证书尚未签发。'];
         }
 
         $info = $this->readCertificateInfo($order['cert_path']);
         $typeText = $this->formatCertType($order['cert_type']);
-        $message = "证书类型：{$typeText}";
+        $message = "📄 证书类型：{$typeText}";
         if ($info['expires_at']) {
             $message .= "\n有效期至：{$info['expires_at']}";
         }
@@ -193,26 +217,26 @@ class CertService
             ->where('tg_user_id', $userId)
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
         if ($order['status'] !== 'issued') {
-            return ['success' => false, 'message' => '证书尚未签发'];
+            return ['success' => false, 'message' => '⚠️ 证书尚未签发。'];
         }
 
-        $message = "证书已导出至服务器目录：\n{$this->getOrderExportPath($order)}\n\n";
-        $message .= "文件：\ncert.pem\nfullchain.pem\nprivkey.pem";
+        $message = "✅ 证书已导出至服务器目录：\n{$this->getOrderExportPath($order)}\n\n";
+        $message .= "文件列表：\ncert.pem\nfullchain.pem\nprivkey.pem";
         return ['success' => true, 'message' => $message];
     }
 
     private function issueOrder($user, CertOrder $order): array
     {
         if ($order['status'] !== 'created') {
-            return ['success' => false, 'message' => '当前订单状态不可生成 TXT'];
+            return ['success' => false, 'message' => '⚠️ 当前订单状态不可生成 TXT。'];
         }
 
         if ($order['domain'] === '') {
-            return ['success' => false, 'message' => '请先提交域名'];
+            return ['success' => false, 'message' => '⚠️ 请先提交域名。'];
         }
 
         $domain = $order['domain'];
@@ -221,7 +245,7 @@ class CertService
         $this->log($user['id'], 'acme_issue_dry_run', $dryRun['output']);
         if (!$dryRun['success']) {
             $order->save(['status' => 'created', 'acme_output' => $dryRun['output']]);
-            return ['success' => false, 'message' => 'acme.sh dry-run 失败：' . $dryRun['output']];
+            return ['success' => false, 'message' => '❌ acme.sh dry-run 失败：' . $dryRun['output']];
         }
 
         $txt = $this->dns->parseTxtRecord($dryRun['output']);
@@ -232,14 +256,14 @@ class CertService
             'acme_output' => $dryRun['output'],
         ]);
 
-        $message = "请添加 TXT 记录后点击「我已完成解析」按钮进行验证。\n";
+        $message = "🧾 <b>请添加 TXT 记录</b> 后点击「我已完成解析」按钮进行验证。\n";
         if ($txt) {
             $message .= "<pre>";
             $message .= "域名 | 主机记录 | 类型 | 记录值\n";
             $message .= "{$domain} | {$txt['name']} | TXT | {$txt['value']}";
             $message .= "</pre>";
         } else {
-            $message .= "无法解析 TXT 记录，请查看输出：\n" . $dryRun['output'];
+            $message .= "⚠️ 无法解析 TXT 记录，请查看输出：\n" . $dryRun['output'];
         }
 
         $this->log($user['id'], 'order_create', $domain);
@@ -252,14 +276,14 @@ class CertService
         $domain = strtolower(trim($domain));
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
-            return ['success' => false, 'message' => '请先发送 /start 绑定账号'];
+            return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
         }
 
         $order = CertOrder::where('domain', $domain)
             ->where('tg_user_id', $user['id'])
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
         return $this->verifyOrderByOrder($order);
@@ -269,14 +293,14 @@ class CertService
     {
         $userId = $order['tg_user_id'];
         if ($order['status'] !== 'dns_wait') {
-            return ['success' => false, 'message' => '当前状态不可验证'];
+            return ['success' => false, 'message' => '⚠️ 当前状态不可验证。'];
         }
 
         if ($order['txt_host'] && $order['txt_value']) {
             if (!$this->dns->verifyTxt($order['txt_host'], $order['txt_value'])) {
                 return [
                     'success' => false,
-                    'message' => '当前未检测到 TXT 记录，DNS 可能仍在生效中。通常需要 1~10 分钟，部分 DNS 更久。',
+                    'message' => '⏳ 当前未检测到 TXT 记录，DNS 可能仍在生效中。通常需要 1~10 分钟，部分 DNS 更久。',
                 ];
             }
         }
@@ -287,13 +311,13 @@ class CertService
         $renew = $this->acme->renew($domains);
         $this->log($userId, 'acme_renew', $renew['output']);
         if (!$renew['success']) {
-            return ['success' => false, 'message' => '证书签发失败：' . $renew['output']];
+            return ['success' => false, 'message' => '❌ 证书签发失败：' . $renew['output']];
         }
 
         $install = $this->acme->installCert($order['domain']);
         $this->log($userId, 'acme_install_cert', $install['output']);
         if (!$install['success']) {
-            return ['success' => false, 'message' => '证书导出失败：' . $install['output']];
+            return ['success' => false, 'message' => '❌ 证书导出失败：' . $install['output']];
         }
 
         $exportPath = $this->getOrderExportPath($order);
@@ -309,7 +333,7 @@ class CertService
 
         $info = $this->readCertificateInfo($exportPath . 'cert.pem');
         $typeText = $this->formatCertType($order['cert_type']);
-        $message = "证书签发成功（{$typeText}），已导出到：{$exportPath}";
+        $message = "🎉 证书签发成功（{$typeText}），已导出到：{$exportPath}";
         if ($info['expires_at']) {
             $message .= "\n有效期至：{$info['expires_at']}";
         }
@@ -322,27 +346,50 @@ class CertService
         $domain = strtolower(trim($domain));
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
-            return ['success' => false, 'message' => '请先发送 /start 绑定账号'];
+            return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
         }
 
         $order = CertOrder::where('domain', $domain)
             ->where('tg_user_id', $user['id'])
             ->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
-        return ['success' => true, 'message' => '当前状态：' . $order['status']];
+        return ['success' => true, 'message' => $this->buildOrderStatusMessage($order, false)];
     }
 
     public function statusByDomain(string $domain): array
     {
         $order = CertOrder::where('domain', $domain)->find();
         if (!$order) {
-            return ['success' => false, 'message' => '订单不存在'];
+            return ['success' => false, 'message' => '❌ 订单不存在。'];
         }
 
-        return ['success' => true, 'message' => '当前状态：' . $order['status']];
+        return ['success' => true, 'message' => $this->buildOrderStatusMessage($order, false)];
+    }
+
+    public function listOrders(array $from): array
+    {
+        $user = TgUser::where('tg_id', $from['id'])->find();
+        if (!$user) {
+            return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
+        }
+
+        $orders = CertOrder::where('tg_user_id', $user['id'])
+            ->order('id', 'desc')
+            ->select();
+        if (!$orders || count($orders) === 0) {
+            return ['success' => true, 'message' => '📂 暂无证书订单记录。'];
+        }
+
+        $lines = ["📂 <b>证书订单记录</b>"];
+        foreach ($orders as $order) {
+            $domainText = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
+            $lines[] = "• {$domainText} | <b>{$order['status']}</b>";
+        }
+
+        return ['success' => true, 'message' => implode("\n", $lines)];
     }
 
     private function log(int $userId, string $action, string $detail): void
@@ -391,5 +438,47 @@ class CertService
         }
 
         return ['expires_at' => date('Y-m-d H:i:s', $certData['validTo_time_t'])];
+    }
+
+    private function hasQuota(TgUser $user): bool
+    {
+        return (int) $user['apply_quota'] > 0;
+    }
+
+    private function consumeQuota(TgUser $user): void
+    {
+        $current = (int) $user['apply_quota'];
+        if ($current <= 0) {
+            return;
+        }
+
+        $user->save(['apply_quota' => $current - 1]);
+    }
+
+    private function quotaExhaustedMessage(TgUser $user): string
+    {
+        $quota = (int) $user['apply_quota'];
+        return "🚫 <b>申请次数不足</b>（剩余 {$quota} 次）。请联系管理员添加次数。";
+    }
+
+    private function buildOrderStatusMessage(CertOrder $order, bool $withTips): string
+    {
+        $status = $order['status'];
+        $domain = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
+        $message = "📌 当前状态：<b>{$status}</b>\n域名：<b>{$domain}</b>";
+
+        if ($status === 'dns_wait') {
+            $message .= "\n\n🧾 <b>请添加 TXT 记录</b> 后点击「我已完成解析」按钮进行验证。\n";
+            if ($order['txt_host'] && $order['txt_value']) {
+                $message .= "<pre>";
+                $message .= "域名 | 主机记录 | 类型 | 记录值\n";
+                $message .= "{$order['domain']} | {$order['txt_host']} | TXT | {$order['txt_value']}";
+                $message .= "</pre>";
+            }
+        } elseif ($status === 'created' && $order['domain'] === '' && $withTips) {
+            $message .= "\n\n📝 请先提交主域名，例如 <b>example.com</b>。";
+        }
+
+        return $message;
     }
 }
