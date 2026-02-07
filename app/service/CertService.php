@@ -893,10 +893,11 @@ class CertService
         return [$order['domain']];
     }
 
-    private function getOrderExportPath(CertOrder $order): string
+    private function getOrderExportPath($order): string
     {
+        $order = $this->normalizeOrderData($order);
         $config = config('tg');
-        return rtrim($config['cert_export_path'], '/') . '/' . $order['domain'] . '/';
+        return rtrim($config['cert_export_path'], '/') . '/' . ($order['domain'] ?? '') . '/';
     }
 
     private function getDownloadBaseUrl(): string
@@ -953,26 +954,27 @@ class CertService
         return "🚫 <b>申请次数不足</b>（剩余 {$quota} 次）。请联系管理员添加次数。";
     }
 
-    private function buildOrderStatusMessage(CertOrder $order, bool $withTips): string
+    private function buildOrderStatusMessage($order, bool $withTips): string
     {
-        $status = $order['status'];
+        $order = $this->normalizeOrderData($order);
+        $status = $order['status'] ?? '';
         $statusLabel = $this->formatStatusLabel($status);
-        $domain = $order['domain'] !== '' ? $order['domain'] : '（未提交域名）';
-        $typeText = $order['cert_type'] ? $this->formatCertType($order['cert_type']) : '（未选择）';
+        $domain = ($order['domain'] ?? '') !== '' ? $order['domain'] : '（未提交域名）';
+        $typeText = ($order['cert_type'] ?? '') ? $this->formatCertType($order['cert_type']) : '（未选择）';
         $message = "📌 当前状态：<b>{$statusLabel}</b>\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>";
 
         if ($status === 'dns_wait') {
             $message .= "\n\n🧾 <b>状态：dns_wait（等待添加 DNS 记录）</b>\n";
             $message .= "请添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n";
             $txtValues = $this->getTxtValues($order);
-            if ($order['txt_host'] && $txtValues !== []) {
-                $message .= $this->formatTxtRecordBlock($order['domain'], $order['txt_host'], $txtValues);
+            if (($order['txt_host'] ?? '') && $txtValues !== []) {
+                $message .= $this->formatTxtRecordBlock($order['domain'] ?? '', $order['txt_host'], $txtValues);
             }
         } elseif ($status === 'dns_verified') {
             $message .= "\n\n✅ <b>状态：dns_verified（DNS 已验证，正在签发）</b>\n请稍后刷新状态。";
-        } elseif ($status === 'created' && $order['domain'] === '') {
+        } elseif ($status === 'created' && ($order['domain'] ?? '') === '') {
             $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交主域名。";
-        } elseif ($status === 'created' && $order['domain'] !== '') {
+        } elseif ($status === 'created' && ($order['domain'] ?? '') !== '') {
             if ((int) ($order['need_dns_generate'] ?? 0) === 1) {
                 $message .= "\n\n⏳ DNS 记录生成任务已提交，稍后展示 TXT。";
             } else {
@@ -1113,15 +1115,16 @@ class CertService
     private function formatTxtRecordBlock(string $domain, string $host, array $values): string
     {
         $recordName = $this->normalizeTxtHost($domain, $host);
-        $message = "\n<b>记录名（主机记录）</b>\n<pre>_acme-challenge</pre>";
-        $message .= "<b>记录类型</b>\n<pre>TXT</pre>";
-        $message .= "<b>记录值</b>\n<pre>" . implode("\n", $values) . "</pre>";
+        $message = "\n<b>记录名（主机记录）</b>\n<pre>_acme-challenge</pre>\n";
+        $message .= "<b>记录类型</b>\n<pre>TXT</pre>\n";
+        $message .= "<b>记录值</b>\n<pre>" . implode("\n", $values) . "</pre>\n";
         $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
     }
 
-    private function buildDownloadFilesMessage(CertOrder $order): string
+    private function buildDownloadFilesMessage($order): string
     {
+        $order = $this->normalizeOrderData($order);
         $exportPath = $this->getOrderExportPath($order);
         $lines = [
             '下载文件：',
@@ -1139,10 +1142,11 @@ class CertService
         return "<pre>" . implode("\n", $lines) . "</pre>";
     }
 
-    private function buildDownloadUrl(CertOrder $order, string $filename): string
+    private function buildDownloadUrl($order, string $filename): string
     {
+        $order = $this->normalizeOrderData($order);
         $base = rtrim($this->getDownloadBaseUrl(), '/');
-        return "{$base}/{$order['domain']}/{$filename}";
+        return "{$base}/" . ($order['domain'] ?? '') . "/{$filename}";
     }
 
     private function buildCreatedKeyboard(CertOrder $order): array
@@ -1205,6 +1209,30 @@ class CertService
         return $map[$status] ?? $status;
     }
 
+    private function normalizeOrderData($order): array
+    {
+        if (is_array($order)) {
+            return $order;
+        }
+
+        if (is_object($order)) {
+            if (method_exists($order, 'toArray')) {
+                $array = $order->toArray();
+                return is_array($array) ? $array : [];
+            }
+
+            if ($order instanceof \ArrayAccess) {
+                $array = [];
+                foreach ($order as $key => $value) {
+                    $array[$key] = $value;
+                }
+                return $array;
+            }
+        }
+
+        return [];
+    }
+
     private function isOrderStale(CertOrder $order, int $minutes = 30): bool
     {
         if (empty($order['updated_at'])) {
@@ -1217,8 +1245,9 @@ class CertService
         return $updated < (time() - $minutes * 60);
     }
 
-    private function getTxtValues(CertOrder $order): array
+    private function getTxtValues($order): array
     {
+        $order = $this->normalizeOrderData($order);
         $values = [];
         if (!empty($order['txt_values_json'])) {
             $decoded = json_decode($order['txt_values_json'], true);
