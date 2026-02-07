@@ -22,7 +22,7 @@ class AcmeService
             $this->acmePath,
             '--issue',
             '--dns',
-            '--dry-run',
+            '--yes-I-know-dns-manual-mode-enough-go-ahead-please',
         ];
         foreach ($this->normalizeDomains($domains) as $domain) {
             $args[] = '-d';
@@ -50,10 +50,10 @@ class AcmeService
 
     public function installCert(string $domain): array
     {
-        $keyFile = $this->exportPath . $domain . '/privkey.pem';
-        $fullchainFile = $this->exportPath . $domain . '/fullchain.pem';
-        $certFile = $this->exportPath . $domain . '/cert.pem';
-        $caFile = $this->exportPath . $domain . '/ca.pem';
+        $keyFile = $this->exportPath . $domain . '/key.key';
+        $fullchainFile = $this->exportPath . $domain . '/fullchain.cer';
+        $certFile = $this->exportPath . $domain . '/cert.cer';
+        $caFile = $this->exportPath . $domain . '/ca.cer';
 
         return $this->run([
             $this->acmePath,
