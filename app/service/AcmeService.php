@@ -61,8 +61,10 @@ class AcmeService
         $args = [
             $this->acmePath,
             '--renew',
+            '--dns',
             '--server',
             $this->acmeServer,
+            '--yes-I-know-dns-manual-mode-enough-go-ahead-please',
         ];
         foreach ($this->normalizeDomains($domains) as $domain) {
             $args[] = '-d';
