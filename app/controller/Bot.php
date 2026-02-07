@@ -71,6 +71,13 @@ class Bot
                     '/status example.com 查看订单状态',
                     '/quota add <tg_id> <次数> 追加申请次数',
                     '',
+                    '📌 <b>常用按钮</b>',
+                    '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
+                    'created 阶段：选择证书类型、提交主域名、生成 DNS 记录、取消订单',
+                    'dns_wait 阶段：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                    'dns_verified 阶段：🚀 立即签发',
+                    'issued 阶段：下载文件、查看证书信息、查看文件路径/重新导出',
+                    '',
                     '📌 <b>状态说明</b>',
                     'created：订单未完成，需选择证书类型并提交主域名。',
                     'dns_wait：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
@@ -81,6 +88,13 @@ class Bot
             } else {
                 $help = implode("\n", [
                     '📖 <b>使用帮助</b>',
+                    '',
+                    '📌 <b>常用按钮</b>',
+                    '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
+                    'created：选择证书类型、提交主域名、生成 DNS 记录、取消订单',
+                    'dns_wait：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                    'dns_verified：🚀 立即签发',
+                    'issued：下载文件、查看证书信息、查看文件路径/重新导出',
                     '',
                     'created：请选择证书类型并提交主域名。',
                     'dns_wait：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
@@ -201,6 +215,9 @@ class Bot
             return;
         }
 
+        $callbackState = ['answered' => false];
+        $this->answerCallbackOnce($callbackId, '✅ 已收到，正在处理…', $callbackState);
+
         $parts = explode(':', $data);
         $action = $parts[0] ?? '';
         $orderId = isset($parts[2]) ? (int) $parts[2] : (isset($parts[1]) ? (int) $parts[1] : 0);
@@ -209,11 +226,10 @@ class Bot
             $type = $parts[1] ?? 'root';
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
             $result = $this->certService->setOrderType($userId, $orderId, $type);
-            $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
             if ($result['success']) {
                 $prompt = "📝 请输入主域名，例如 <b>example.com</b>。\n";
                 $prompt .= "不要输入 http:// 或 https://\n";
@@ -228,13 +244,12 @@ class Bot
         if ($action === 'verify') {
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
             $result = $this->certService->verifyOrderById($userId, $orderId);
-            $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
             if (($result['success'] ?? false) && isset($result['order'])) {
-                $keyboard = $this->buildIssuedKeyboard($result['order']['id']);
+                $keyboard = $this->resolveOrderKeyboard($result);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
             } else {
                 $this->telegram->sendMessage($chatId, $result['message']);
@@ -243,7 +258,6 @@ class Bot
         }
 
         if ($action === 'later') {
-            $this->telegram->answerCallbackQuery($callbackId, '已记录，你可稍后再验证。');
             $this->telegram->sendMessage($chatId, '✅ 好的，稍后完成解析后再点击验证即可。');
             return;
         }
@@ -251,11 +265,10 @@ class Bot
         if ($action === 'download') {
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
             $result = $this->certService->getDownloadInfo($userId, $orderId);
-            $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
             $keyboard = $this->buildIssuedKeyboard($orderId);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
             return;
@@ -265,11 +278,10 @@ class Bot
             $fileKey = $parts[1] ?? '';
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
             $result = $this->certService->getDownloadFileInfo($userId, $orderId, $fileKey);
-            $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
             $keyboard = $this->buildIssuedKeyboard($orderId);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
             return;
@@ -278,11 +290,10 @@ class Bot
         if ($action === 'info') {
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
             $result = $this->certService->getCertificateInfo($userId, $orderId);
-            $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
             $keyboard = $this->buildIssuedKeyboard($orderId);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
             return;
@@ -292,12 +303,11 @@ class Bot
             $subAction = $parts[1] ?? '';
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
 
             if ($subAction === 'type') {
-                $this->telegram->answerCallbackQuery($callbackId, '请选择证书类型');
                 $keyboard = $this->buildTypeKeyboard($orderId);
                 $messageText = "你正在申请 SSL 证书，请选择证书类型👇\n";
                 $messageText .= "✅ <b>根域名证书</b>：仅保护 example.com，不包含子域名。\n";
@@ -309,14 +319,12 @@ class Bot
 
             if ($subAction === 'domain') {
                 $result = $this->certService->requestDomainInput($userId, $orderId);
-                $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
                 $this->telegram->sendMessage($chatId, $result['message']);
                 return;
             }
 
             if ($subAction === 'retry') {
                 $result = $this->certService->retryDnsChallenge($userId, $orderId);
-                $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
                 $keyboard = $this->resolveOrderKeyboard($result);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
                 return;
@@ -326,11 +334,10 @@ class Bot
         if ($action === 'cancel') {
             $userId = $this->getUserIdByTgId($from);
             if (!$userId) {
-                $this->telegram->answerCallbackQuery($callbackId, '用户不存在，请先发送 /start');
+                $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                 return;
             }
             $result = $this->certService->cancelOrder($userId, $orderId);
-            $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
             $this->telegram->sendMessage($chatId, $result['message'], $this->buildMainMenuKeyboard());
             return;
         }
@@ -339,7 +346,6 @@ class Bot
             $menuAction = $parts[1] ?? '';
             if ($menuAction === 'new') {
                 $result = $this->certService->startOrder($from);
-                $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
                 if (!$result['success']) {
                     $this->telegram->sendMessage($chatId, $result['message']);
                     return;
@@ -356,7 +362,6 @@ class Bot
 
             if ($menuAction === 'status') {
                 $this->setPendingAction($from['id'], 'await_status_domain');
-                $this->telegram->answerCallbackQuery($callbackId, '请输入要查询的域名');
                 $this->telegram->sendMessage($chatId, '🔎 请输入要查询的域名，例如 <b>example.com</b>。');
                 return;
             }
@@ -372,22 +377,33 @@ class Bot
                         '/status example.com 查看订单状态',
                         '/quota add <tg_id> <次数> 追加申请次数',
                         '',
+                        '📌 <b>常用按钮</b>',
+                        '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
+                        'created 阶段：选择证书类型、提交主域名、生成 DNS 记录、取消订单',
+                        'dns_wait 阶段：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                        'dns_verified 阶段：🚀 立即签发',
+                        'issued 阶段：下载文件、查看证书信息、查看文件路径/重新导出',
+                        '',
                         '📌 <b>状态说明</b>',
                         'created：订单未完成，需选择证书类型并提交主域名。',
                         'dns_wait：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
                         'dns_verified：DNS 已验证，点击验证继续签发。',
                         'issued：证书已签发，可下载文件。',
                     ]);
-                    $this->telegram->answerCallbackQuery($callbackId, '帮助已发送');
                     $this->telegram->sendMessage($chatId, $help, $this->buildMainMenuKeyboard());
                 } else {
-                    $this->telegram->answerCallbackQuery($callbackId, '已发送使用提示');
                     $this->telegram->sendMessage(
                         $chatId,
                         "📖 <b>使用帮助</b>\n\n" .
+                        "📌 <b>常用按钮</b>\n" .
+                        "🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助\n" .
+                        "created：选择证书类型、提交主域名、生成 DNS 记录、取消订单\n" .
+                        "dns_wait：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单\n" .
+                        "dns_verified：🚀 立即签发\n" .
+                        "issued：下载文件、查看证书信息、查看文件路径/重新导出\n\n" .
                         "created：请选择证书类型并提交主域名。\n" .
-                        "dns_wait：按提示添加 TXT 记录后点击「我已完成解析（验证）」。\n" .
-                        "dns_verified：DNS 已验证，继续点击验证完成签发。\n" .
+                        "dns_wait：按提示添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n" .
+                        "dns_verified：DNS 已验证，继续点击「🚀 立即签发」完成签发。\n" .
                         "issued：证书已签发，使用下方按钮下载。\n\n" .
                         "提示：任何时候都可以通过订单列表继续或取消订单。",
                         $this->buildMainMenuKeyboard()
@@ -402,7 +418,6 @@ class Bot
                     $this->clearPendingAction($userId);
                 }
                 $result = $this->certService->listOrders($from);
-                $this->telegram->answerCallbackQuery($callbackId, $result['message'] ?? '');
                 $this->sendBatchMessages($chatId, $result);
                 return;
             }
@@ -421,11 +436,26 @@ class Bot
         ];
     }
 
-    private function buildDnsKeyboard(int $orderId): array
+    private function buildDnsKeyboard(int $orderId, string $status): array
     {
+        if ($status === 'dns_verified') {
+            return [
+                [
+                    ['text' => '🚀 立即签发', 'callback_data' => "verify:{$orderId}"],
+                ],
+                [
+                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
+                ],
+            ];
+        }
+
         return [
             [
-                ['text' => '我已完成解析（验证）', 'callback_data' => "verify:{$orderId}"],
+                ['text' => '✅ 我已解析，开始验证', 'callback_data' => "verify:{$orderId}"],
+            ],
+            [
+                ['text' => '🔁 重新生成DNS记录', 'callback_data' => "created:retry:{$orderId}"],
+                ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$orderId}"],
             ],
             [
                 ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
@@ -452,7 +482,7 @@ class Bot
                 ];
             } else {
                 $buttons[] = [
-                    ['text' => '重新生成 DNS 记录', 'callback_data' => "created:retry:{$orderId}"],
+                    ['text' => '生成 DNS 记录', 'callback_data' => "created:retry:{$orderId}"],
                 ];
             }
         }
@@ -469,10 +499,12 @@ class Bot
             [
                 ['text' => 'fullchain.cer', 'callback_data' => "file:fullchain:{$orderId}"],
                 ['text' => 'cert.cer', 'callback_data' => "file:cert:{$orderId}"],
-                ['text' => 'key', 'callback_data' => "file:key:{$orderId}"],
+                ['text' => 'key.key', 'callback_data' => "file:key:{$orderId}"],
+                ['text' => 'ca.cer', 'callback_data' => "file:ca:{$orderId}"],
             ],
             [
                 ['text' => '查看证书信息', 'callback_data' => "info:{$orderId}"],
+                ['text' => '查看文件路径/重新导出', 'callback_data' => "download:{$orderId}"],
             ],
             [
                 ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
@@ -547,7 +579,7 @@ class Bot
 
         $status = $result['order']['status'] ?? '';
         if (in_array($status, ['dns_wait', 'dns_verified'], true)) {
-            return $this->buildDnsKeyboard($result['order']['id']);
+            return $this->buildDnsKeyboard($result['order']['id'], $status);
         }
 
         if ($status === 'created') {
@@ -616,5 +648,15 @@ class Bot
         if (isset($result['message'])) {
             $this->telegram->sendMessage($chatId, $result['message']);
         }
+    }
+
+    private function answerCallbackOnce(string $callbackId, string $message, array &$state): void
+    {
+        if ($callbackId === '' || ($state['answered'] ?? false)) {
+            return;
+        }
+
+        $this->telegram->answerCallbackQuery($callbackId, $message);
+        $state['answered'] = true;
     }
 }

@@ -15,9 +15,15 @@ class Webhook
             return json(['ok' => false]);
         }
 
+        $response = json(['ok' => true]);
+        if (function_exists('fastcgi_finish_request')) {
+            $response->send();
+            fastcgi_finish_request();
+        }
+
         $bot = new Bot(new TelegramService());
         $bot->handleUpdate($data);
 
-        return json(['ok' => true]);
+        return $response;
     }
 }
