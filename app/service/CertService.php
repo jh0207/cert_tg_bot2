@@ -455,7 +455,7 @@ class CertService
 
         $this->processDnsGenerationOrder($order);
         $latest = CertOrder::where('id', $order['id'])->find();
-        if ($latest && $latest['status'] === 'dns_wait') {
+        if ($latest && in_array($latest['status'], ['dns_wait', 'issued', 'failed'], true)) {
             return [
                 'success' => true,
                 'message' => $this->buildOrderStatusMessage($latest, true),
@@ -714,6 +714,10 @@ class CertService
         $stderr = $result['stderr'] ?? '';
         $output = $result['output'] ?? '';
         $combinedOutput = trim($output . "\n" . $stderr);
+        if ($this->isExistingCertOutput($combinedOutput)) {
+            $this->resetOrderForExistingCert($order, $combinedOutput);
+            return false;
+        }
         if ($this->isCertSuccessOutput($combinedOutput)) {
             $installOutput = $this->installOrExportCert($order);
             if ($installOutput === null) {
