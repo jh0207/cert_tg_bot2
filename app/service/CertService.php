@@ -836,7 +836,11 @@ class CertService
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
-        if (!($install['success'] ?? false)) {
+        $installSuccess = (bool) ($install['success'] ?? false);
+        if (!$installSuccess && $this->isInstallSuccessOutput($installCombined)) {
+            $installSuccess = true;
+        }
+        if (!$installSuccess) {
             $this->logDebug('acme_install_failed', ['order_id' => $order['id']]);
             $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
                 'acme_output' => $installCombined,
@@ -1296,11 +1300,11 @@ class CertService
     private function formatStatusLabel(string $status): string
     {
         $map = [
-            'created' => 'created（待完善）',
-            'dns_wait' => 'dns_wait（等待添加 DNS 记录）',
-            'dns_verified' => 'dns_verified（DNS 已验证）',
-            'issued' => 'issued（已签发）',
-            'failed' => 'failed（处理失败）',
+            'created' => '待完善',
+            'dns_wait' => '待添加 DNS 解析',
+            'dns_verified' => 'DNS 已验证',
+            'issued' => '已签发',
+            'failed' => '处理失败',
         ];
 
         return $map[$status] ?? $status;
@@ -1348,6 +1352,14 @@ class CertService
     {
         $output = strtolower($output);
         return strpos($output, 'seems to already have an ecc cert') !== false;
+    }
+
+    private function isInstallSuccessOutput(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'installing cert to') !== false
+            && strpos($output, 'installing key to') !== false
+            && strpos($output, 'installing full chain to') !== false;
     }
 
     private function handleExistingCert(CertOrder $order, string $acmeOutput): void
@@ -1421,7 +1433,11 @@ class CertService
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
-        if (!($install['success'] ?? false)) {
+        $installSuccess = (bool) ($install['success'] ?? false);
+        if (!$installSuccess && $this->isInstallSuccessOutput($installCombined)) {
+            $installSuccess = true;
+        }
+        if (!$installSuccess) {
             $this->logDebug('acme_install_failed', ['order_id' => $order['id'], 'output' => $installCombined]);
             return null;
         }
