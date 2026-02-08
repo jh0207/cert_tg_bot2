@@ -324,7 +324,7 @@ class Bot
                     return;
                 }
                 $result = $this->certService->getDownloadInfo($userId, $orderId);
-                $keyboard = $this->buildIssuedKeyboard($orderId);
+                $keyboard = $this->buildIssuedKeyboard($orderId, $userId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
                 return;
             }
@@ -337,7 +337,7 @@ class Bot
                 }
                 $this->sendProcessingMessage($chatId, '✅ 重新导出任务已提交，请稍后查看。');
                 $result = $this->certService->reinstallCert($userId, $orderId);
-                $keyboard = $this->buildIssuedKeyboard($orderId);
+                $keyboard = $this->buildIssuedKeyboard($orderId, $userId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
                 return;
             }
@@ -350,7 +350,7 @@ class Bot
                     return;
                 }
                 $result = $this->certService->getDownloadFileInfo($userId, $orderId, $fileKey);
-                $keyboard = $this->buildIssuedKeyboard($orderId);
+                $keyboard = $this->buildIssuedKeyboard($orderId, $userId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
                 return;
             }
@@ -362,7 +362,7 @@ class Bot
                     return;
                 }
                 $result = $this->certService->getCertificateInfo($userId, $orderId);
-                $keyboard = $this->buildIssuedKeyboard($orderId);
+                $keyboard = $this->buildIssuedKeyboard($orderId, $userId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
                 return;
             }
@@ -376,6 +376,17 @@ class Bot
                 $result = $this->certService->statusById($userId, $orderId);
                 $keyboard = $this->resolveOrderKeyboard($result);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
+                return;
+            }
+
+            if ($action === 'guide') {
+                $messageText = "📖 <b>部署教程</b>\n\n";
+                $messageText .= "主要文件（建议使用以下两个文件即可）：\n";
+                $messageText .= "1) <b>key.key</b>：证书私钥（可改名为 .key）。\n";
+                $messageText .= "2) <b>fullchain.cer</b>：完整证书链（可改名为 .crt / .pem）。\n\n";
+                $messageText .= "说明：fullchain.cer 内包含域名证书与中间证书链。\n";
+                $messageText .= "如服务器或面板提示格式不正确，可将后缀改为 .crt 或 .pem 再导入。\n";
+                $this->telegram->sendMessage($chatId, $messageText);
                 return;
             }
 
@@ -613,18 +624,29 @@ class Bot
         return $buttons;
     }
 
-    private function buildIssuedKeyboard(int $orderId): array
+    private function buildIssuedKeyboard(int $orderId, ?int $userId = null): array
     {
+        $downloadButton = null;
+        if ($userId) {
+            $zipUrl = $this->certService->getOrderZipUrl($userId, $orderId);
+            if ($zipUrl) {
+                $downloadButton = ['text' => '⬇️ 下载压缩包', 'url' => $zipUrl];
+            }
+        }
+
+        $firstRow = [];
+        if ($downloadButton) {
+            $firstRow[] = $downloadButton;
+        }
+        $firstRow[] = ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"];
+
         return [
             [
-                ['text' => 'fullchain.cer', 'callback_data' => "file:fullchain:{$orderId}"],
-                ['text' => 'cert.cer', 'callback_data' => "file:cert:{$orderId}"],
-                ['text' => 'key.key', 'callback_data' => "file:key:{$orderId}"],
-                ['text' => 'ca.cer', 'callback_data' => "file:ca:{$orderId}"],
+                ...$firstRow,
             ],
             [
                 ['text' => '查看证书信息', 'callback_data' => "info:{$orderId}"],
-                ['text' => '查看文件路径', 'callback_data' => "download:{$orderId}"],
+                ['text' => '查看下载链接', 'callback_data' => "download:{$orderId}"],
             ],
             [
                 ['text' => '重新导出', 'callback_data' => "reinstall:{$orderId}"],
@@ -729,7 +751,7 @@ class Bot
         }
 
         if ($status === 'issued') {
-            return $this->buildIssuedKeyboard($order['id']);
+            return $this->buildIssuedKeyboard($order['id'], (int) ($order['tg_user_id'] ?? 0));
         }
 
         if ($status === 'failed') {

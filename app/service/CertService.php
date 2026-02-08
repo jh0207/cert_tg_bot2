@@ -314,7 +314,6 @@ class CertService
         if ($issuedAt) {
             $message .= "签发时间：{$issuedAt}\n";
         }
-        $message .= "已导出至服务器目录：\n{$this->getOrderExportPath($order)}\n\n";
         $message .= $this->buildDownloadFilesMessage($order);
         return ['success' => true, 'message' => $message];
     }
@@ -342,13 +341,26 @@ class CertService
             return ['success' => false, 'message' => '⚠️ 文件类型不正确。'];
         }
 
-        $exportPath = $this->getOrderExportPath($order);
         $filename = $fileMap[$fileKey];
         $label = $fileKey === 'key' ? 'key.key' : $filename;
         $downloadUrl = $this->buildDownloadUrl($order, $filename);
-        $message = "📥 {$label} 下载地址：\n{$downloadUrl}\n\n";
-        $message .= "服务器路径：\n{$exportPath}{$filename}";
+        $message = "📥 {$label} 下载地址：\n{$downloadUrl}\n\n如按钮无法打开，请复制链接到浏览器下载。";
         return ['success' => true, 'message' => $message];
+    }
+
+    public function getOrderZipUrl(int $userId, int $orderId): ?string
+    {
+        $order = CertOrder::where('id', $orderId)
+            ->where('tg_user_id', $userId)
+            ->find();
+        if (!$order) {
+            return null;
+        }
+        $archiveName = ($order['domain'] ?? '') === '' ? '' : ($order['domain'] . '.zip');
+        if ($archiveName === '') {
+            return null;
+        }
+        return $this->buildDownloadUrl($order, $archiveName);
     }
 
     public function requestDomainInput(int $userId, int $orderId): array
@@ -1046,14 +1058,14 @@ class CertService
         $message = "📌 当前状态：<b>{$statusLabel}</b>\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>";
 
         if ($status === 'dns_wait') {
-            $message .= "\n\n🧾 <b>状态：dns_wait（等待添加 DNS 记录）</b>\n";
+            $message .= "\n\n🧾 <b>状态：待添加 DNS 解析</b>\n";
             $message .= "请添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n";
             $txtValues = $this->getTxtValues($order);
             if (($order['txt_host'] ?? '') && $txtValues !== []) {
                 $message .= $this->formatTxtRecordBlock($order['domain'] ?? '', $order['txt_host'], $txtValues);
             }
         } elseif ($status === 'dns_verified') {
-            $message .= "\n\n✅ <b>状态：dns_verified（DNS 已验证，正在签发）</b>\n请稍后刷新状态。";
+            $message .= "\n\n✅ <b>状态：DNS 已验证</b>\n正在签发，请稍后刷新状态。";
         } elseif ($status === 'created' && ($order['domain'] ?? '') === '') {
             $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交主域名。";
         } elseif ($status === 'created' && ($order['domain'] ?? '') !== '') {
@@ -1068,7 +1080,7 @@ class CertService
             }
         } elseif ($status === 'issued') {
             $issuedAt = $order['updated_at'] ?? '';
-            $message .= "\n\n🎉 <b>状态：issued</b>\n";
+            $message .= "\n\n🎉 <b>状态：已签发</b>\n";
             if ($issuedAt) {
                 $message .= "签发时间：{$issuedAt}\n";
             }
@@ -1077,7 +1089,7 @@ class CertService
                 $message .= "\n\n⏳ 重新导出任务已提交，请稍后刷新状态。";
             }
         } elseif ($status === 'failed') {
-            $message .= "\n\n❌ <b>状态：failed</b>\n订单处理失败，请根据错误信息重新申请或取消订单。";
+            $message .= "\n\n❌ <b>状态：处理失败</b>\n订单处理失败，请根据错误信息重新申请或取消订单。";
         }
 
         if (!empty($order['last_error'])) {
@@ -1219,27 +1231,17 @@ class CertService
     private function buildDownloadFilesMessage($order): string
     {
         $order = $this->normalizeOrderData($order);
-        $exportPath = $this->getOrderExportPath($order);
         $archiveName = $this->ensureCertificateArchive($order);
+        if (!$archiveName) {
+            return "<pre>下载文件：暂未生成压缩包，请稍后刷新状态。</pre>";
+        }
+        $archiveUrl = $this->buildDownloadUrl($order, $archiveName);
         $lines = [
-            '下载文件：',
-            "fullchain.cer -> {$this->buildDownloadUrl($order, 'fullchain.cer')}",
-            "cert.cer -> {$this->buildDownloadUrl($order, 'cert.cer')}",
-            "key.key -> {$this->buildDownloadUrl($order, 'key.key')}",
-            "ca.cer -> {$this->buildDownloadUrl($order, 'ca.cer')}",
+            '下载压缩包：',
+            $archiveUrl,
+            '',
+            '如按钮无法打开，请复制以上链接到浏览器下载。',
         ];
-        if ($archiveName) {
-            $lines[] = "{$archiveName} -> {$this->buildDownloadUrl($order, $archiveName)}";
-        }
-        $lines[] = '';
-        $lines[] = '服务器路径：';
-        $lines[] = "fullchain.cer -> {$exportPath}fullchain.cer";
-        $lines[] = "cert.cer -> {$exportPath}cert.cer";
-        $lines[] = "key.key -> {$exportPath}key.key";
-        $lines[] = "ca.cer -> {$exportPath}ca.cer";
-        if ($archiveName) {
-            $lines[] = "{$archiveName} -> {$exportPath}{$archiveName}";
-        }
         return "<pre>" . implode("\n", $lines) . "</pre>";
     }
 
