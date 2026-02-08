@@ -1028,15 +1028,41 @@ class CertService
         return "{$domain}_{$orderId}";
     }
 
-    private function getOrderArchiveName($order): string
+    private function getDownloadExportKey($order): string
     {
         $order = $this->normalizeOrderData($order);
         $domain = $order['domain'] ?? '';
         $orderId = (int) ($order['id'] ?? 0);
-        if ($domain === '' || $orderId <= 0) {
+        $keyNew = ($domain !== '' && $orderId > 0) ? "{$domain}_{$orderId}" : $domain;
+        $certPath = $order['cert_path'] ?? '';
+        if ($certPath !== '' && $domain !== '') {
+            if (strpos($certPath, "/{$keyNew}/") === false && strpos($certPath, "/{$domain}/") !== false) {
+                return $domain;
+            }
+        }
+        return $keyNew !== '' ? $keyNew : 'unknown';
+    }
+
+    private function getDownloadExportPath($order): string
+    {
+        $order = $this->normalizeOrderData($order);
+        $config = config('tg');
+        $key = $this->getDownloadExportKey($order);
+        return rtrim($config['cert_export_path'], '/') . '/' . $key . '/';
+    }
+
+    private function getOrderArchiveName($order): string
+    {
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        if ($domain === '') {
             return '';
         }
-        return "{$domain}_{$orderId}.zip";
+        $key = $this->getDownloadExportKey($order);
+        if ($key === 'unknown') {
+            return '';
+        }
+        return "{$key}.zip";
     }
 
     private function getDownloadBaseUrl(): string
@@ -1211,7 +1237,7 @@ class CertService
             return "下载压缩包：暂未生成，请稍后刷新状态。";
         }
         $archiveUrl = $this->buildDownloadUrl($order, $archiveName);
-        $message = "下载压缩包：<a href=\"{$archiveUrl}\">点击下载</a>\n";
+        $message = "下载压缩包：点击下载 ({$archiveUrl})\n";
         $message .= "复制链接：\n<pre>{$archiveUrl}</pre>";
         return $message;
     }
@@ -1220,7 +1246,7 @@ class CertService
     {
         $order = $this->normalizeOrderData($order);
         $base = rtrim($this->getDownloadBaseUrl(), '/');
-        $key = $this->getOrderExportKey($order);
+        $key = $this->getDownloadExportKey($order);
         return "{$base}/{$key}/{$filename}";
     }
 
@@ -1488,7 +1514,7 @@ class CertService
             return null;
         }
 
-        $exportPath = $this->getOrderExportPath($order);
+        $exportPath = $this->getDownloadExportPath($order);
         $files = ['fullchain.cer', 'cert.cer', 'key.key', 'ca.cer'];
         $latestMtime = 0;
         foreach ($files as $file) {

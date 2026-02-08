@@ -57,6 +57,15 @@ class Bot
                 'text' => $text,
             ]);
             $user = $userRecord->toArray();
+            if ($text === '🆕 申请证书') {
+                $text = '/new';
+            } elseif ($text === '📂 我的订单') {
+                $text = '/orders';
+            } elseif ($text === '🔎 查询状态') {
+                $text = '/status';
+            } elseif ($text === '📖 使用帮助') {
+                $text = '/help';
+            }
             if ($this->handlePendingInput($user, $message, $chatId, $text)) {
                 return;
             }
