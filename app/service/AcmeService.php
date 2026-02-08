@@ -74,13 +74,14 @@ class AcmeService
         return $this->run($args);
     }
 
-    public function installCert(string $domain): array
+    public function installCert(string $domain, ?string $exportDir = null): array
     {
-        $this->ensureExportDir($domain);
-        $keyFile = $this->exportPath . $domain . '/key.key';
-        $fullchainFile = $this->exportPath . $domain . '/fullchain.cer';
-        $certFile = $this->exportPath . $domain . '/cert.cer';
-        $caFile = $this->exportPath . $domain . '/ca.cer';
+        $exportDir = $this->normalizeExportDir($domain, $exportDir);
+        $this->ensureExportDir($exportDir);
+        $keyFile = $exportDir . 'key.key';
+        $fullchainFile = $exportDir . 'fullchain.cer';
+        $certFile = $exportDir . 'cert.cer';
+        $caFile = $exportDir . 'ca.cer';
 
         return $this->run([
             $this->acmePath,
@@ -98,9 +99,10 @@ class AcmeService
         ]);
     }
 
-    public function exportExistingCert(string $domain): array
+    public function exportExistingCert(string $domain, ?string $exportDir = null): array
     {
-        $this->ensureExportDir($domain);
+        $exportDir = $this->normalizeExportDir($domain, $exportDir);
+        $this->ensureExportDir($exportDir);
         $sourceDir = $this->resolveAcmeCertDir($domain);
         if (!is_dir($sourceDir)) {
             return [
@@ -118,10 +120,10 @@ class AcmeService
             'fullchain.cer' => $sourceDir . DIRECTORY_SEPARATOR . 'fullchain.cer',
         ];
         $targets = [
-            'cert.cer' => $this->exportPath . $domain . '/cert.cer',
-            'key.key' => $this->exportPath . $domain . '/key.key',
-            'ca.cer' => $this->exportPath . $domain . '/ca.cer',
-            'fullchain.cer' => $this->exportPath . $domain . '/fullchain.cer',
+            'cert.cer' => $exportDir . 'cert.cer',
+            'key.key' => $exportDir . 'key.key',
+            'ca.cer' => $exportDir . 'ca.cer',
+            'fullchain.cer' => $exportDir . 'fullchain.cer',
         ];
 
         foreach ($mapping as $key => $path) {
@@ -253,12 +255,20 @@ class AcmeService
         return [$domains];
     }
 
-    private function ensureExportDir(string $domain): void
+    private function ensureExportDir(string $exportDir): void
     {
-        $dir = $this->exportPath . $domain;
+        $dir = rtrim($exportDir, '/');
         if (!@is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
+    }
+
+    private function normalizeExportDir(string $domain, ?string $exportDir): string
+    {
+        if ($exportDir) {
+            return rtrim($exportDir, '/') . '/';
+        }
+        return $this->exportPath . $domain . '/';
     }
 
     private function resolveAcmeCertDir(string $domain): string

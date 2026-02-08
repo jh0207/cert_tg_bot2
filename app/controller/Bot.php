@@ -80,6 +80,10 @@ class Bot
                 $role = $user['role'];
                 $messageText = "👋 <b>欢迎使用证书机器人</b>\n";
                 $messageText .= "当前角色：<b>{$role}</b>\n\n";
+                if (!$this->auth->isAdmin($message['from']['id'])) {
+                    $quota = (int) ($user['apply_quota'] ?? 0);
+                    $messageText .= "剩余申请次数：<b>{$quota}</b>\n\n";
+                }
                 $messageText .= "请选择操作👇";
                 $this->registerBotCommands();
                 $this->sendMainMenu($chatId, $messageText);
@@ -113,8 +117,12 @@ class Bot
                     ]);
                     $this->sendMainMenu($chatId, $help);
                 } else {
+                    $quota = (int) ($user['apply_quota'] ?? 0);
                     $help = implode("\n", [
                         '📖 <b>使用帮助</b>',
+                        '',
+                        "当前剩余申请次数：<b>{$quota}</b>",
+                        '如需增加次数，请联系管理员。',
                         '',
                         '📌 <b>常用按钮</b>',
                         '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
@@ -153,7 +161,9 @@ class Bot
             }
 
             if (strpos($text, '/orders') === 0) {
-                $result = $this->certService->listOrders($message['from']);
+                $pageArg = trim(str_replace('/orders', '', $text));
+                $page = ctype_digit($pageArg) ? (int) $pageArg : 1;
+                $result = $this->certService->listOrdersByPage($message['from'], $page);
                 if (!($result['success'] ?? false)) {
                     $this->telegram->sendMessage($chatId, $result['message']);
                     return;
@@ -174,7 +184,7 @@ class Bot
                     return;
                 }
 
-                $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
+                $this->sendProcessingMessage($chatId, '⏳ 正在提交申请，请稍候…');
                 $result = $this->certService->createOrder($message['from'], $domainInput);
                 $keyboard = $this->resolveOrderKeyboard($result);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -288,10 +298,6 @@ class Bot
         $data = $callback['data'] ?? '';
         $from = $callback['from'] ?? [];
         $chatId = $callback['message']['chat']['id'] ?? null;
-        $callbackId = $callback['id'] ?? '';
-
-        $callbackState = ['answered' => false];
-        $this->answerCallbackOnce($callbackId, '✅ 已收到，正在处理…', $callbackState);
 
         if (!$chatId || $data === '') {
             return;
@@ -328,6 +334,11 @@ class Bot
                     $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                     return;
                 }
+                $order = $this->certService->findOrderById($userId, $orderId);
+                if ($order && $this->certService->isOrderCoolingDown($order)) {
+                    $this->sendProcessingMessage($chatId, '⏳ 系统正在处理上一次请求，请稍后再试。');
+                    return;
+                }
                 $this->sendVerifyProcessingMessageById($chatId, $userId, $orderId);
                 $result = $this->certService->verifyOrderById($userId, $orderId);
                 if (($result['success'] ?? false) && isset($result['order'])) {
@@ -350,6 +361,7 @@ class Bot
                     $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                     return;
                 }
+                $this->sendProcessingMessage($chatId, '⏳ 正在准备下载信息，请稍候…');
                 $result = $this->certService->getDownloadInfo($userId, $orderId);
                 $keyboard = $this->buildIssuedKeyboard($orderId, $userId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -362,7 +374,12 @@ class Bot
                     $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                     return;
                 }
-                $this->sendProcessingMessage($chatId, '✅ 重新导出任务已提交，请稍后查看。');
+                $order = $this->certService->findOrderById($userId, $orderId);
+                if ($order && $this->certService->isOrderCoolingDown($order)) {
+                    $this->sendProcessingMessage($chatId, '⏳ 系统正在处理上一次请求，请稍后再试。');
+                    return;
+                }
+                $this->sendProcessingMessage($chatId, '⏳ 正在重新导出证书，请稍候…');
                 $result = $this->certService->reinstallCert($userId, $orderId);
                 $keyboard = $this->buildIssuedKeyboard($orderId, $userId);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -400,6 +417,7 @@ class Bot
                     $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                     return;
                 }
+                $this->sendProcessingMessage($chatId, '⏳ 正在获取订单状态，请稍候…');
                 $result = $this->certService->statusById($userId, $orderId);
                 $keyboard = $this->resolveOrderKeyboard($result);
                 $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -442,7 +460,12 @@ class Bot
                 }
 
                 if ($subAction === 'retry') {
-                    $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
+                    $order = $this->certService->findOrderById($userId, $orderId);
+                    if ($order && $this->certService->isOrderCoolingDown($order)) {
+                        $this->sendProcessingMessage($chatId, '⏳ 系统正在处理上一次请求，请稍后再试。');
+                        return;
+                    }
+                    $this->sendProcessingMessage($chatId, '⏳ 正在生成 DNS TXT 记录，请稍候…');
                     $result = $this->certService->retryDnsChallenge($userId, $orderId);
                     $keyboard = $this->resolveOrderKeyboard($result);
                     $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -456,6 +479,7 @@ class Bot
                     $this->telegram->sendMessage($chatId, '❌ 用户不存在，请先发送 /start');
                     return;
                 }
+                $this->sendProcessingMessage($chatId, '⏳ 正在取消订单，请稍候…');
                 $result = $this->certService->cancelOrder($userId, $orderId);
                 $this->sendMainMenu($chatId, $result['message']);
                 return;
@@ -512,9 +536,17 @@ class Bot
                         ]);
                         $this->sendMainMenu($chatId, $help);
                     } else {
+                        $userId = $this->getUserIdByTgId($from);
+                        $quota = 0;
+                        if ($userId) {
+                            $userRecord = TgUser::where('id', $userId)->find();
+                            $quota = (int) ($userRecord['apply_quota'] ?? 0);
+                        }
                         $this->sendMainMenu(
                             $chatId,
                             "📖 <b>使用帮助</b>\n\n" .
+                            "当前剩余申请次数：<b>{$quota}</b>\n" .
+                            "如需增加次数，请联系管理员。\n\n" .
                             "📌 <b>常用按钮</b>\n" .
                             "🆕 申请证书 / 📂 我的订单 / 📖 使用帮助\n" .
                             "待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单\n" .
@@ -536,7 +568,8 @@ class Bot
                     if ($userId) {
                         $this->clearPendingAction($userId);
                     }
-                    $result = $this->certService->listOrders($from);
+                    $page = isset($parts[2]) && ctype_digit($parts[2]) ? (int) $parts[2] : 1;
+                    $result = $this->certService->listOrdersByPage($from, $page);
                     $this->sendBatchMessages($chatId, $result);
                     return;
                 }
@@ -841,6 +874,19 @@ class Bot
             return false;
         }
 
+        $menuTexts = ['🆕 申请证书', '📂 我的订单', '🔎 查询状态', '📖 使用帮助'];
+        $menuCommands = ['/start', '/help', '/orders', '/new', '/status'];
+        foreach ($menuCommands as $command) {
+            if (strpos($text, $command) === 0) {
+                $this->clearPendingAction($user['id']);
+                return false;
+            }
+        }
+        if (in_array($text, $menuTexts, true)) {
+            $this->clearPendingAction($user['id']);
+            return false;
+        }
+
         $this->logDebug('pending_action_hit', [
             'user_id' => $user['id'],
             'action' => $user['pending_action'],
@@ -963,16 +1009,6 @@ class Bot
         if (isset($result['message'])) {
             $this->telegram->sendMessage($chatId, $result['message']);
         }
-    }
-
-    private function answerCallbackOnce(string $callbackId, string $message, array &$state): void
-    {
-        if ($callbackId === '' || ($state['answered'] ?? false)) {
-            return;
-        }
-
-        $this->telegram->answerCallbackQuery($callbackId, $message);
-        $state['answered'] = true;
     }
 
     private function sendProcessingMessage(int $chatId, string $message): void

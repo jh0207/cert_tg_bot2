@@ -291,7 +291,7 @@ class CertService
 
         return [
             'success' => true,
-            'message' => '✅ 重新导出任务已提交，稍后可通过下载按钮查看。',
+            'message' => '⏳ 重新导出任务已提交，请稍后刷新状态查看下载。',
         ];
     }
 
@@ -356,7 +356,7 @@ class CertService
         if (!$order) {
             return null;
         }
-        $archiveName = ($order['domain'] ?? '') === '' ? '' : ($order['domain'] . '.zip');
+        $archiveName = $this->getOrderArchiveName($order);
         if ($archiveName === '') {
             return null;
         }
@@ -453,6 +453,7 @@ class CertService
         }
 
         $domain = $order['domain'];
+        $this->acme->removeOrder($domain);
         $this->updateOrderStatus($user['id'], $order, 'created', [
             'need_dns_generate' => 1,
             'need_issue' => 0,
@@ -484,7 +485,7 @@ class CertService
 
         return [
             'success' => true,
-            'message' => '✅ 任务已提交，稍后展示 DNS TXT 记录。',
+            'message' => '⏳ 正在生成 DNS TXT 记录，请稍候…',
             'order' => $order,
         ];
     }
@@ -645,22 +646,43 @@ class CertService
 
     public function listOrders(array $from): array
     {
+        return $this->listOrdersByPage($from, 1);
+    }
+
+    public function listOrdersByPage(array $from, int $page): array
+    {
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
         }
 
+        $perPage = 5;
+        $page = max(1, $page);
+        $total = (int) CertOrder::where('tg_user_id', $user['id'])->count();
+        if ($total === 0) {
+            return ['success' => true, 'message' => '📂 暂无证书订单记录。'];
+        }
+        $totalPages = max(1, (int) ceil($total / $perPage));
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+
         $orders = CertOrder::where('tg_user_id', $user['id'])
             ->order('id', 'desc')
+            ->page($page, $perPage)
             ->select();
         if (!$orders || count($orders) === 0) {
             return ['success' => true, 'message' => '📂 暂无证书订单记录。'];
         }
 
+        $headerText = "📂 <b>证书订单记录</b>\n点击下方按钮查看订单详情或继续操作。";
+        $headerText .= "\n第 <b>{$page}</b>/{$totalPages} 页";
+        $headerKeyboard = $this->buildOrdersPaginationKeyboard($page, $totalPages);
+
         $messages = [
             [
-                'text' => "📂 <b>证书订单记录</b>\n如需查看某个订单详情，请发送 /status 域名。",
-                'keyboard' => null,
+                'text' => $headerText,
+                'keyboard' => $headerKeyboard,
             ],
         ];
 
@@ -844,7 +866,7 @@ class CertService
             return false;
         }
         $installCombined = '';
-        $install = $this->acme->installCert($order['domain']);
+        $install = $this->acme->installCert($order['domain'], $this->getOrderExportPath($order));
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
@@ -876,7 +898,7 @@ class CertService
             $processed++;
             $this->logDebug('acme_reinstall_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
             try {
-                $install = $this->acme->installCert($order['domain']);
+                $install = $this->acme->installCert($order['domain'], $this->getOrderExportPath($order));
             } catch (\Throwable $e) {
                 $this->logDebug('acme_reinstall_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
                 $this->recordAcmeFailure($order, $e->getMessage(), [
@@ -991,7 +1013,30 @@ class CertService
     {
         $order = $this->normalizeOrderData($order);
         $config = config('tg');
-        return rtrim($config['cert_export_path'], '/') . '/' . ($order['domain'] ?? '') . '/';
+        $key = $this->getOrderExportKey($order);
+        return rtrim($config['cert_export_path'], '/') . '/' . $key . '/';
+    }
+
+    private function getOrderExportKey($order): string
+    {
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        $orderId = (int) ($order['id'] ?? 0);
+        if ($domain === '' || $orderId <= 0) {
+            return trim($domain) !== '' ? $domain : 'unknown';
+        }
+        return "{$domain}_{$orderId}";
+    }
+
+    private function getOrderArchiveName($order): string
+    {
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        $orderId = (int) ($order['id'] ?? 0);
+        if ($domain === '' || $orderId <= 0) {
+            return '';
+        }
+        return "{$domain}_{$orderId}.zip";
     }
 
     private function getDownloadBaseUrl(): string
@@ -1109,8 +1154,31 @@ class CertService
 
         return [
             'text' => $message,
-            'keyboard' => null,
+            'keyboard' => [
+                [
+                    ['text' => '查看详情/操作', 'callback_data' => "status:{$order['id']}"],
+                ],
+            ],
         ];
+    }
+
+    private function buildOrdersPaginationKeyboard(int $page, int $totalPages): ?array
+    {
+        if ($totalPages <= 1) {
+            return null;
+        }
+
+        $buttons = [];
+        if ($page > 1) {
+            $prevPage = $page - 1;
+            $buttons[] = ['text' => '⬅️ 上一页', 'callback_data' => "menu:orders:{$prevPage}"];
+        }
+        if ($page < $totalPages) {
+            $nextPage = $page + 1;
+            $buttons[] = ['text' => '下一页 ➡️', 'callback_data' => "menu:orders:{$nextPage}"];
+        }
+
+        return $buttons !== [] ? [$buttons] : null;
     }
 
     private function formatTxtRecordBlock(string $domain, string $host, array $values): string
@@ -1152,7 +1220,8 @@ class CertService
     {
         $order = $this->normalizeOrderData($order);
         $base = rtrim($this->getDownloadBaseUrl(), '/');
-        return "{$base}/" . ($order['domain'] ?? '') . "/{$filename}";
+        $key = $this->getOrderExportKey($order);
+        return "{$base}/{$key}/{$filename}";
     }
 
     private function buildCreatedKeyboard(CertOrder $order): array
@@ -1334,7 +1403,7 @@ class CertService
             return null;
         }
 
-        $install = $this->acme->installCert($order['domain']);
+        $install = $this->acme->installCert($order['domain'], $this->getOrderExportPath($order));
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
@@ -1394,6 +1463,19 @@ class CertService
         return $updated < (time() - $minutes * 60);
     }
 
+    public function isOrderCoolingDown($order, int $seconds = 8): bool
+    {
+        $order = $this->normalizeOrderData($order);
+        if (empty($order['updated_at'])) {
+            return false;
+        }
+        $updated = strtotime($order['updated_at']);
+        if (!$updated) {
+            return false;
+        }
+        return $updated > (time() - $seconds);
+    }
+
     private function ensureCertificateArchive($order): ?string
     {
         if (!class_exists(\ZipArchive::class)) {
@@ -1420,7 +1502,10 @@ class CertService
             }
         }
 
-        $archiveName = "{$domain}.zip";
+        $archiveName = $this->getOrderArchiveName($order);
+        if ($archiveName === '') {
+            return null;
+        }
         $archivePath = $exportPath . $archiveName;
         if (@is_file($archivePath)) {
             $archiveMtime = @filemtime($archivePath);
