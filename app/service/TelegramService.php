@@ -36,6 +36,29 @@ class TelegramService
         curl_close($ch);
     }
 
+    public function sendMessageWithReplyKeyboard(int $chatId, string $text, array $keyboard, bool $disablePreview = true): void
+    {
+        $url = $this->apiBase . '/bot' . $this->token . '/sendMessage';
+        $payload = [
+            'chat_id' => $chatId,
+            'text' => $text,
+            'parse_mode' => 'HTML',
+            'disable_web_page_preview' => $disablePreview,
+            'reply_markup' => json_encode([
+                'keyboard' => $keyboard,
+                'resize_keyboard' => true,
+            ], JSON_UNESCAPED_UNICODE),
+        ];
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($payload));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_exec($ch);
+        curl_close($ch);
+    }
+
     public function answerCallbackQuery(string $callbackId, string $text = ''): void
     {
         $url = $this->apiBase . '/bot' . $this->token . '/answerCallbackQuery';
