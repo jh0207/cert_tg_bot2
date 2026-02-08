@@ -388,7 +388,7 @@ class CertService
             ]);
         }
 
-        return ['success' => true, 'message' => '📝 请发送主域名，例如 <b>example.com</b>。'];
+        return ['success' => true, 'message' => '📝 请发送要申请的域名，例如 <b>example.com</b> 或 <b>www.example.com</b>。'];
     }
 
     public function cancelOrder(int $userId, int $orderId): array
@@ -1000,7 +1000,7 @@ class CertService
 
     private function formatCertType(string $type): string
     {
-        return $type === 'wildcard' ? '通配符证书' : '根域名证书';
+        return $type === 'wildcard' ? '通配符证书' : '单域名证书';
     }
 
     private function getAcmeDomains(CertOrder $order): array
@@ -1141,13 +1141,13 @@ class CertService
         } elseif ($status === 'dns_verified') {
             $message .= "\n\n✅ <b>状态：DNS 已验证</b>\n正在签发，请稍后刷新状态。";
         } elseif ($status === 'created' && ($order['domain'] ?? '') === '') {
-            $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交主域名。";
+            $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交域名。";
         } elseif ($status === 'created' && ($order['domain'] ?? '') !== '') {
             if ((int) ($order['need_dns_generate'] ?? 0) === 1) {
                 $message .= "\n\n⏳ DNS 记录生成任务已提交，稍后展示 TXT。";
             } else {
                 $message .= "\n\n⚠️ 订单未完成，下一步请生成 DNS TXT 记录。\n";
-                $message .= "提示：根域名证书仅保护 example.com；通配符证书保护 *.example.com，但这里依然只填写主域名。";
+                $message .= "提示：单域名证书可填写 <b>example.com</b> 或 <b>www.example.com</b>；通配符证书只需填写主域名 <b>example.com</b>（不要输入 * 或子域名）。";
             }
             if ($this->isOrderStale($order)) {
                 $message .= "\n⚠️ 该订单已长时间未推进，建议取消后重新申请。";
@@ -1226,9 +1226,9 @@ class CertService
             $message .= "⚠️ 当前需要添加 <b>{$valueCount}</b> 条 TXT 记录，请全部添加后再验证。\n";
             $message .= "✅ DNS 允许同一个主机记录（_acme-challenge）存在多条 TXT 记录值，请放心添加。\n";
         } elseif ($valueCount === 1) {
-            $message .= "✅ 当前仅需添加 1 条 TXT 记录，根域名与通配符会共用同一条记录。\n";
+            $message .= "✅ 当前仅需添加 <b>1</b> 条 TXT 记录。\n";
         }
-        $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
+        $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
     }
 
@@ -1264,7 +1264,7 @@ class CertService
         } else {
             if ($order['domain'] === '') {
                 $buttons[] = [
-                    ['text' => '提交主域名', 'callback_data' => "created:domain:{$order['id']}"],
+                    ['text' => '提交域名', 'callback_data' => "created:domain:{$order['id']}"],
                 ];
                 $buttons[] = [
                     ['text' => '重新选择证书类型', 'callback_data' => "created:type:{$order['id']}"],
@@ -1586,20 +1586,16 @@ class CertService
     private function validateDomainByType(string $domain, ?string $certType): ?string
     {
         if (strpos($domain, '*') !== false) {
-            return '❌ 请不要输入通配符格式（*.example.com），只需要输入主域名，例如 <b>example.com</b>。';
+            return '❌ 请不要输入通配符格式（*.example.com），只需要输入域名，例如 <b>example.com</b>。';
         }
 
-        if (!$certType) {
+        if ($certType !== 'wildcard') {
             return null;
         }
 
         $labels = explode('.', $domain);
         if (count($labels) > 2) {
-            if ($certType === 'wildcard') {
-                return '⚠️ 通配符证书请输入主域名（根域名），例如 <b>example.com</b>，不要输入子域名。';
-            }
-
-            return '⚠️ 根域名证书请输入主域名（根域名），例如 <b>example.com</b>，不要输入子域名。';
+            return '⚠️ 通配符证书请输入主域名（根域名），例如 <b>example.com</b>，不要输入子域名。';
         }
 
         return null;

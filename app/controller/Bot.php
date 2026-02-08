@@ -109,7 +109,7 @@ class Bot
                         '🛠️ <b>管理员指令大全</b>',
                         '',
                         '/new 申请证书（进入选择类型流程）',
-                        '/domain example.com 快速申请根域名证书',
+                        '/domain example.com 快速申请单域名证书',
                         '/verify example.com DNS 解析完成后验证并签发',
                         '/status example.com 查看订单状态',
                         '/diag 查看诊断信息（Owner 专用）',
@@ -119,13 +119,13 @@ class Bot
                         '',
                         '📌 <b>常用按钮</b>',
                         '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                        '待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
+                        '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
                         '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
                         'DNS 已验证：等待后台签发 / 刷新状态',
                         '已签发：下载文件、查看证书信息、重新导出',
                         '',
                         '📌 <b>状态说明</b>',
-                        '待完善：订单未完成，需选择证书类型并提交主域名。',
+                        '待完善：订单未完成，需选择证书类型并提交域名。',
                         '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
                         'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
                         '已签发：证书已签发，可下载文件。',
@@ -141,12 +141,12 @@ class Bot
                         '',
                         '📌 <b>常用按钮</b>',
                         '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                        '待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
+                        '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
                         '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
                         'DNS 已验证：🔄 刷新状态',
                         '已签发：下载文件、查看证书信息、重新导出',
                         '',
-                        '待完善：请选择证书类型并提交主域名。',
+                        '待完善：请选择证书类型并提交域名。',
                         '待添加 DNS 解析：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
                         'DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。',
                         '已签发：证书已签发，使用下方按钮下载。',
@@ -168,9 +168,9 @@ class Bot
                 $orderId = $result['order']['id'];
                 $keyboard = $this->buildTypeKeyboard($orderId);
                 $messageText = "你正在申请 SSL 证书，请选择证书类型👇\n";
-                $messageText .= "✅ <b>根域名证书</b>：仅保护 example.com，不包含子域名。\n";
+                $messageText .= "✅ <b>单域名证书</b>：保护单个域名（可为根域名或子域名，如 example.com / www.example.com）。\n";
                 $messageText .= "✅ <b>通配符证书</b>：保护 *.example.com，并同时包含 example.com。\n";
-                $messageText .= "📌 请务必输入主域名（根域名），不要输入 www.example.com 或 *.example.com。";
+                $messageText .= "📌 通配符证书只需输入主域名（example.com），不要输入 *.example.com。";
                 $this->telegram->sendMessage($chatId, $messageText, $keyboard);
                 return;
             }
@@ -195,7 +195,7 @@ class Bot
 
             if (strpos($text, '/domain') === 0) {
                 if ($domainInput === null) {
-                    $this->telegram->sendMessage($chatId, '⚠️ 请输入主域名，例如 <b>example.com</b>。');
+                    $this->telegram->sendMessage($chatId, '⚠️ 请输入要申请的域名，例如 <b>example.com</b> 或 <b>www.example.com</b>。');
                     return;
                 }
 
@@ -379,9 +379,15 @@ class Bot
                 }
                 $result = $this->certService->setOrderType($userId, $orderId, $type);
                 if ($result['success']) {
-                    $prompt = "📝 请输入主域名，例如 <b>example.com</b>。\n";
-                    $prompt .= "不要输入 http:// 或 https://\n";
-                    $prompt .= "不要输入 *.example.com 或 www.example.com";
+                    if ($type === 'wildcard') {
+                        $prompt = "📝 请输入主域名，例如 <b>example.com</b>。\n";
+                        $prompt .= "不要输入 http:// 或 https://\n";
+                        $prompt .= "不要输入 *.example.com 或 www.example.com";
+                    } else {
+                        $prompt = "📝 请输入要申请的域名，例如 <b>example.com</b> 或 <b>www.example.com</b>。\n";
+                        $prompt .= "不要输入 http:// 或 https://\n";
+                        $prompt .= "不要输入 *.example.com";
+                    }
                     $this->telegram->sendMessage($chatId, $prompt);
                 } else {
                     $this->telegram->sendMessage($chatId, $result['message']);
@@ -509,9 +515,9 @@ class Bot
                 if ($subAction === 'type') {
                     $keyboard = $this->buildTypeKeyboard($orderId);
                     $messageText = "你正在申请 SSL 证书，请选择证书类型👇\n";
-                    $messageText .= "✅ <b>根域名证书</b>：仅保护 example.com，不包含子域名。\n";
+                    $messageText .= "✅ <b>单域名证书</b>：保护单个域名（可为根域名或子域名，如 example.com / www.example.com）。\n";
                     $messageText .= "✅ <b>通配符证书</b>：保护 *.example.com，并同时包含 example.com。\n";
-                    $messageText .= "📌 请务必输入主域名（根域名），不要输入 www.example.com 或 *.example.com。";
+                    $messageText .= "📌 通配符证书只需输入主域名（example.com），不要输入 *.example.com。";
                     $this->telegram->sendMessage($chatId, $messageText, $keyboard);
                     return;
                 }
@@ -559,9 +565,9 @@ class Bot
 
                     $keyboard = $this->buildTypeKeyboard($result['order']['id']);
                     $messageText = "你正在申请 SSL 证书，请选择证书类型👇\n";
-                    $messageText .= "✅ <b>根域名证书</b>：仅保护 example.com，不包含子域名。\n";
+                    $messageText .= "✅ <b>单域名证书</b>：保护单个域名（可为根域名或子域名，如 example.com / www.example.com）。\n";
                     $messageText .= "✅ <b>通配符证书</b>：保护 *.example.com，并同时包含 example.com。\n";
-                    $messageText .= "📌 请务必输入主域名（根域名），不要输入 www.example.com 或 *.example.com。";
+                    $messageText .= "📌 通配符证书只需输入主域名（example.com），不要输入 *.example.com。";
                     $this->telegram->sendMessage($chatId, $messageText, $keyboard);
                     return;
                 }
@@ -578,7 +584,7 @@ class Bot
                             '🛠️ <b>管理员指令大全</b>',
                             '',
                             '/new 申请证书（进入选择类型流程）',
-                            '/domain example.com 快速申请根域名证书',
+                            '/domain example.com 快速申请单域名证书',
                             '/verify example.com DNS 解析完成后验证并签发',
                             '/status example.com 查看订单状态',
                             '/diag 查看诊断信息（Owner 专用）',
@@ -588,13 +594,13 @@ class Bot
                             '',
                             '📌 <b>常用按钮</b>',
                             '🆕 申请证书 / 📂 我的订单 / 📖 使用帮助',
-                            '待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
+                            '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
                             '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
                             'DNS 已验证：等待后台签发 / 刷新状态',
                             '已签发：下载文件、查看证书信息、重新导出',
                             '',
                             '📌 <b>状态说明</b>',
-                            '待完善：订单未完成，需选择证书类型并提交主域名。',
+                            '待完善：订单未完成，需选择证书类型并提交域名。',
                             '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
                             'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
                             '已签发：证书已签发，可下载文件。',
@@ -614,11 +620,11 @@ class Bot
                             "如需增加次数，请联系管理员。\n\n" .
                             "📌 <b>常用按钮</b>\n" .
                             "🆕 申请证书 / 📂 我的订单 / 📖 使用帮助\n" .
-                            "待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单\n" .
+                            "待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单\n" .
                             "待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单\n" .
                             "DNS 已验证：🔄 刷新状态 / ❌ 取消订单\n" .
                             "已签发：下载文件、查看证书信息、重新导出\n\n" .
-                            "待完善：请选择证书类型并提交主域名。\n" .
+                            "待完善：请选择证书类型并提交域名。\n" .
                             "待添加 DNS 解析：按提示添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n" .
                             "DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。\n" .
                             "已签发：证书已签发，使用下方按钮下载。\n\n" .
@@ -669,7 +675,7 @@ class Bot
     {
         return [
             [
-                ['text' => '根域名证书（example.com）', 'callback_data' => "type:root:{$orderId}"],
+                ['text' => '单域名证书（example.com / www.example.com）', 'callback_data' => "type:root:{$orderId}"],
             ],
             [
                 ['text' => '通配符证书（*.example.com + example.com）', 'callback_data' => "type:wildcard:{$orderId}"],
@@ -731,7 +737,7 @@ class Bot
             }
             if (($order['domain'] ?? '') === '') {
                 $buttons[] = [
-                    ['text' => '提交主域名', 'callback_data' => "created:domain:{$orderId}"],
+                    ['text' => '提交域名', 'callback_data' => "created:domain:{$orderId}"],
                 ];
                 $buttons[] = [
                     ['text' => '重新选择证书类型', 'callback_data' => "created:type:{$orderId}"],
@@ -952,16 +958,7 @@ class Bot
             return false;
         }
 
-        $menuTexts = ['🆕 申请证书', '📂 我的订单', '🔎 查询状态', '📖 使用帮助'];
-        $menuCommands = ['/start', '/help', '/orders', '/new', '/status'];
-        foreach ($menuCommands as $command) {
-            if (strpos($text, $command) === 0) {
-                $this->clearPendingAction($user['id']);
-                return false;
-            }
-        }
-        if (in_array($text, $menuTexts, true)) {
-            $this->clearPendingAction($user['id']);
+        if (in_array($text, ['/help', '/start'], true)) {
             return false;
         }
 
@@ -974,7 +971,7 @@ class Bot
         if ($user['pending_action'] === 'await_domain') {
             $domainInput = $this->extractCommandArgument($text, '/domain');
             if ($domainInput === null && strpos($text, '/') === 0) {
-                $this->telegram->sendMessage($chatId, '⚠️ 请先输入主域名，例如 <b>example.com</b>。');
+                $this->telegram->sendMessage($chatId, '⚠️ 请先输入要申请的域名，例如 <b>example.com</b> 或 <b>www.example.com</b>。');
                 return true;
             }
 
