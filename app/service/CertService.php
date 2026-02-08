@@ -826,6 +826,11 @@ class CertService
         }
 
         $this->logDebug('acme_install_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
+        $exportError = '';
+        if (!$this->ensureOrderExportDir($order, $exportError)) {
+            $this->recordAcmeFailure($order, $exportError);
+            return false;
+        }
         $installCombined = '';
         $install = $this->acme->installCert($order['domain']);
         $installStderr = $install['stderr'] ?? '';
@@ -1406,6 +1411,12 @@ class CertService
 
     private function installOrExportCert(CertOrder $order): ?string
     {
+        $exportError = '';
+        if (!$this->ensureOrderExportDir($order, $exportError)) {
+            $this->recordAcmeFailure($order, $exportError);
+            return null;
+        }
+
         $install = $this->acme->installCert($order['domain']);
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
@@ -1433,6 +1444,19 @@ class CertService
             'retry_count' => 0,
         ]);
         $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
+        return true;
+    }
+
+    private function ensureOrderExportDir(CertOrder $order, ?string &$error = null): bool
+    {
+        $path = $this->getOrderExportPath($order);
+        if (@is_dir($path)) {
+            return true;
+        }
+        if (!@mkdir($path, 0755, true) && !@is_dir($path)) {
+            $error = "证书已签发但导出目录不可用，请检查 CERT_EXPORT_PATH：{$path}";
+            return false;
+        }
         return true;
     }
 
