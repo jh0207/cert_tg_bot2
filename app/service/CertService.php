@@ -788,6 +788,10 @@ class CertService
         $renewStderr = $renew['stderr'] ?? '';
         $renewOutput = $renew['output'] ?? '';
         $renewCombined = trim($renewOutput . "\n" . $renewStderr);
+        if ($this->isExistingCertOutput($renewCombined)) {
+            $this->resetOrderForExistingCert($order, $renewCombined);
+            return false;
+        }
         $renewSuccess = (bool) ($renew['success'] ?? false);
         if (!$renewSuccess && $this->isCertSuccessOutput($renewCombined)) {
             $renewSuccess = true;
@@ -820,12 +824,7 @@ class CertService
             $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
                 'acme_output' => $installCombined,
             ]);
-            $fallback = $this->acme->exportExistingCert($order['domain']);
-            if (!($fallback['success'] ?? false)) {
-                $this->logDebug('acme_export_failed', ['order_id' => $order['id'], 'output' => $fallback['output'] ?? '']);
-                return false;
-            }
-            $installCombined = trim($installCombined . "\n" . ($fallback['output'] ?? ''));
+            return false;
         }
 
         return $this->markOrderIssued($order, trim($renewCombined . "\n" . $installCombined));
@@ -1295,6 +1294,28 @@ class CertService
             || strpos($output, 'full-chain cert is in') !== false;
     }
 
+    private function isExistingCertOutput(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'seems to already have an ecc cert') !== false;
+    }
+
+    private function resetOrderForExistingCert(CertOrder $order, string $acmeOutput): void
+    {
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'created', [
+            'need_dns_generate' => 1,
+            'need_issue' => 0,
+            'need_install' => 0,
+            'retry_count' => 0,
+            'last_error' => '检测到已有证书，已重新下单申请，请稍后刷新状态。',
+            'txt_host' => '',
+            'txt_value' => '',
+            'txt_values_json' => '',
+            'acme_output' => $acmeOutput,
+        ]);
+        $this->log($order['tg_user_id'], 'order_reset', $order['domain']);
+    }
+
     private function installOrExportCert(CertOrder $order): ?string
     {
         $install = $this->acme->installCert($order['domain']);
@@ -1302,12 +1323,8 @@ class CertService
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
         if (!($install['success'] ?? false)) {
-            $fallback = $this->acme->exportExistingCert($order['domain']);
-            if (!($fallback['success'] ?? false)) {
-                $this->logDebug('acme_export_failed', ['order_id' => $order['id'], 'output' => $fallback['output'] ?? '']);
-                return null;
-            }
-            $installCombined = trim($installCombined . "\n" . ($fallback['output'] ?? ''));
+            $this->logDebug('acme_install_failed', ['order_id' => $order['id'], 'output' => $installCombined]);
+            return null;
         }
 
         return $installCombined;
@@ -1361,10 +1378,10 @@ class CertService
         $latestMtime = 0;
         foreach ($files as $file) {
             $path = $exportPath . $file;
-            if (!is_file($path)) {
+            if (!@is_file($path)) {
                 return null;
             }
-            $mtime = filemtime($path);
+            $mtime = @filemtime($path);
             if ($mtime !== false) {
                 $latestMtime = max($latestMtime, $mtime);
             }
@@ -1372,8 +1389,8 @@ class CertService
 
         $archiveName = "{$domain}.zip";
         $archivePath = $exportPath . $archiveName;
-        if (is_file($archivePath)) {
-            $archiveMtime = filemtime($archivePath);
+        if (@is_file($archivePath)) {
+            $archiveMtime = @filemtime($archivePath);
             if ($archiveMtime !== false && $archiveMtime >= $latestMtime) {
                 return $archiveName;
             }

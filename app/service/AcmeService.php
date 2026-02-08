@@ -246,7 +246,7 @@ class AcmeService
     private function ensureExportDir(string $domain): void
     {
         $dir = $this->exportPath . $domain;
-        if (!is_dir($dir)) {
+        if (!@is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
     }
