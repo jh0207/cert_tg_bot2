@@ -1233,16 +1233,12 @@ class CertService
         $order = $this->normalizeOrderData($order);
         $archiveName = $this->ensureCertificateArchive($order);
         if (!$archiveName) {
-            return "<pre>下载文件：暂未生成压缩包，请稍后刷新状态。</pre>";
+            return "下载压缩包：暂未生成，请稍后刷新状态。";
         }
         $archiveUrl = $this->buildDownloadUrl($order, $archiveName);
-        $lines = [
-            '下载压缩包：',
-            $archiveUrl,
-            '',
-            '如按钮无法打开，请复制以上链接到浏览器下载。',
-        ];
-        return "<pre>" . implode("\n", $lines) . "</pre>";
+        $message = "下载压缩包：<a href=\"{$archiveUrl}\">点击下载</a>\n";
+        $message .= "复制链接：\n<pre>{$archiveUrl}</pre>";
+        return $message;
     }
 
     private function buildDownloadUrl($order, string $filename): string
