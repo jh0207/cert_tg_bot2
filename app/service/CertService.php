@@ -20,10 +20,11 @@ class CertService
 
     public function createOrder(array $from, string $domain): array
     {
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
-            return ['success' => false, 'message' => '❌ 域名格式错误，请检查后重试。'];
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
         }
         $typeError = $this->validateDomainByType($domain, 'root');
         if ($typeError) {
@@ -163,11 +164,11 @@ class CertService
 
     public function submitDomain(int $userId, string $domain): array
     {
-        $domain = strip_tags($domain);
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
-            return ['success' => false, 'message' => '❌ 域名格式错误，请检查后重试。'];
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
         }
 
         $user = TgUser::where('id', $userId)->find();
@@ -290,7 +291,7 @@ class CertService
 
         return [
             'success' => true,
-            'message' => '✅ 重新导出任务已提交，稍后可通过下载按钮查看。',
+            'message' => '⏳ 重新导出任务已提交，请稍后刷新状态查看下载。',
         ];
     }
 
@@ -313,7 +314,6 @@ class CertService
         if ($issuedAt) {
             $message .= "签发时间：{$issuedAt}\n";
         }
-        $message .= "已导出至服务器目录：\n{$this->getOrderExportPath($order)}\n\n";
         $message .= $this->buildDownloadFilesMessage($order);
         return ['success' => true, 'message' => $message];
     }
@@ -341,13 +341,26 @@ class CertService
             return ['success' => false, 'message' => '⚠️ 文件类型不正确。'];
         }
 
-        $exportPath = $this->getOrderExportPath($order);
         $filename = $fileMap[$fileKey];
         $label = $fileKey === 'key' ? 'key.key' : $filename;
         $downloadUrl = $this->buildDownloadUrl($order, $filename);
-        $message = "📥 {$label} 下载地址：\n{$downloadUrl}\n\n";
-        $message .= "服务器路径：\n{$exportPath}{$filename}";
+        $message = "📥 {$label} 下载地址：\n{$downloadUrl}\n\n如按钮无法打开，请复制链接到浏览器下载。";
         return ['success' => true, 'message' => $message];
+    }
+
+    public function getOrderZipUrl(int $userId, int $orderId): ?string
+    {
+        $order = CertOrder::where('id', $orderId)
+            ->where('tg_user_id', $userId)
+            ->find();
+        if (!$order) {
+            return null;
+        }
+        $archiveName = $this->getOrderArchiveName($order);
+        if ($archiveName === '') {
+            return null;
+        }
+        return $this->buildDownloadUrl($order, $archiveName);
     }
 
     public function requestDomainInput(int $userId, int $orderId): array
@@ -425,6 +438,7 @@ class CertService
             return ['success' => false, 'message' => '❌ 用户不存在。'];
         }
 
+        $this->acme->removeOrder($order['domain']);
         return $this->issueOrder($user, $order);
     }
 
@@ -439,6 +453,7 @@ class CertService
         }
 
         $domain = $order['domain'];
+        $this->acme->removeOrder($domain);
         $this->updateOrderStatus($user['id'], $order, 'created', [
             'need_dns_generate' => 1,
             'need_issue' => 0,
@@ -454,7 +469,13 @@ class CertService
 
         $this->processDnsGenerationOrder($order);
         $latest = CertOrder::where('id', $order['id'])->find();
-        if ($latest && $latest['status'] === 'dns_wait') {
+        if (!$latest) {
+            $latest = CertOrder::where('tg_user_id', $user['id'])
+                ->where('domain', $domain)
+                ->order('id', 'desc')
+                ->find();
+        }
+        if ($latest && in_array($latest['status'], ['dns_wait', 'issued', 'failed', 'created'], true)) {
             return [
                 'success' => true,
                 'message' => $this->buildOrderStatusMessage($latest, true),
@@ -464,14 +485,18 @@ class CertService
 
         return [
             'success' => true,
-            'message' => '✅ 任务已提交，稍后展示 DNS TXT 记录。',
+            'message' => '⏳ 正在生成 DNS TXT 记录，请稍候…',
             'order' => $order,
         ];
     }
 
     public function verifyOrder(array $from, string $domain): array
     {
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
+        if ($domain === '') {
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
+        }
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
@@ -532,6 +557,12 @@ class CertService
             ]);
             $this->processIssueOrder($order);
             $latest = CertOrder::where('id', $order['id'])->find();
+            if (!$latest) {
+                $latest = CertOrder::where('tg_user_id', $userId)
+                    ->where('domain', $order['domain'])
+                    ->order('id', 'desc')
+                    ->find();
+            }
             if ($latest) {
                 $latestOrder = $latest->toArray();
                 return [
@@ -549,7 +580,11 @@ class CertService
 
     public function status(array $from, string $domain): array
     {
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
+        if ($domain === '') {
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
+        }
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
@@ -596,6 +631,11 @@ class CertService
 
     public function statusByDomain(string $domain): array
     {
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
+        if ($domain === '') {
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
+        }
         $order = CertOrder::where('domain', $domain)->find();
         if (!$order) {
             return ['success' => false, 'message' => '❌ 订单不存在。'];
@@ -606,22 +646,43 @@ class CertService
 
     public function listOrders(array $from): array
     {
+        return $this->listOrdersByPage($from, 1);
+    }
+
+    public function listOrdersByPage(array $from, int $page): array
+    {
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
         }
 
+        $perPage = 5;
+        $page = max(1, $page);
+        $total = (int) CertOrder::where('tg_user_id', $user['id'])->count();
+        if ($total === 0) {
+            return ['success' => true, 'message' => '📂 暂无证书订单记录。'];
+        }
+        $totalPages = max(1, (int) ceil($total / $perPage));
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+
         $orders = CertOrder::where('tg_user_id', $user['id'])
             ->order('id', 'desc')
+            ->page($page, $perPage)
             ->select();
         if (!$orders || count($orders) === 0) {
             return ['success' => true, 'message' => '📂 暂无证书订单记录。'];
         }
 
+        $headerText = "📂 <b>证书订单记录</b>\n点击下方按钮查看订单详情或继续操作。";
+        $headerText .= "\n第 <b>{$page}</b>/{$totalPages} 页";
+        $headerKeyboard = $this->buildOrdersPaginationKeyboard($page, $totalPages);
+
         $messages = [
             [
-                'text' => "📂 <b>证书订单记录</b>\n点击订单按钮查看/操作。",
-                'keyboard' => null,
+                'text' => $headerText,
+                'keyboard' => $headerKeyboard,
             ],
         ];
 
@@ -641,11 +702,13 @@ class CertService
         $dnsProcessed = $this->processDnsGeneration($limit);
         $issueProcessed = $this->processIssueOrders($limit);
         $installProcessed = $this->processInstallOrders($limit);
+        $failedProcessed = $this->processFailedOrders($limit);
 
         return [
             'dns' => $dnsProcessed,
             'issue' => $issueProcessed,
             'install' => $installProcessed,
+            'failed' => $failedProcessed,
         ];
     }
 
@@ -693,6 +756,20 @@ class CertService
         $stderr = $result['stderr'] ?? '';
         $output = $result['output'] ?? '';
         $combinedOutput = trim($output . "\n" . $stderr);
+        if ($this->isExistingCertOutput($combinedOutput)) {
+            $this->handleExistingCert($order, $combinedOutput);
+            return false;
+        }
+        if ($this->isCertSuccessOutput($combinedOutput)) {
+            $installOutput = $this->installOrExportCert($order);
+            if ($installOutput === null) {
+                $this->recordAcmeFailure($order, '证书已签发但导出失败，请稍后重试。', [
+                    'acme_output' => $combinedOutput,
+                ]);
+                return false;
+            }
+            return $this->markOrderIssued($order, trim($combinedOutput . "\n" . $installOutput));
+        }
         $txt = $this->dns->parseTxtRecords($combinedOutput);
         if (!$txt) {
             if (!($result['success'] ?? false)) {
@@ -757,7 +834,15 @@ class CertService
         $renewStderr = $renew['stderr'] ?? '';
         $renewOutput = $renew['output'] ?? '';
         $renewCombined = trim($renewOutput . "\n" . $renewStderr);
-        if (!($renew['success'] ?? false)) {
+        if ($this->isExistingCertOutput($renewCombined)) {
+            $this->handleExistingCert($order, $renewCombined);
+            return false;
+        }
+        $renewSuccess = (bool) ($renew['success'] ?? false);
+        if (!$renewSuccess && $this->isCertSuccessOutput($renewCombined)) {
+            $renewSuccess = true;
+        }
+        if (!$renewSuccess) {
             if ($this->isTxtMismatchError($renewCombined)) {
                 $order->save([
                     'status' => 'dns_wait',
@@ -775,37 +860,29 @@ class CertService
         }
 
         $this->logDebug('acme_install_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
+        $exportError = '';
+        if (!$this->ensureOrderExportDir($order, $exportError)) {
+            $this->recordAcmeFailure($order, $exportError);
+            return false;
+        }
         $installCombined = '';
-        $install = $this->acme->installCert($order['domain']);
+        $install = $this->acme->installCert($order['domain'], $this->getOrderExportPath($order));
         $installStderr = $install['stderr'] ?? '';
         $installOutput = $install['output'] ?? '';
         $installCombined = trim($installOutput . "\n" . $installStderr);
-        if (!($install['success'] ?? false)) {
+        $installSuccess = (bool) ($install['success'] ?? false);
+        if (!$installSuccess && $this->isInstallSuccessOutput($installCombined)) {
+            $installSuccess = true;
+        }
+        if (!$installSuccess) {
             $this->logDebug('acme_install_failed', ['order_id' => $order['id']]);
             $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
                 'acme_output' => $installCombined,
             ]);
-            $fallback = $this->acme->exportExistingCert($order['domain']);
-            if (!($fallback['success'] ?? false)) {
-                $this->logDebug('acme_export_failed', ['order_id' => $order['id'], 'output' => $fallback['output'] ?? '']);
-                return false;
-            }
-            $installCombined = trim($installCombined . "\n" . ($fallback['output'] ?? ''));
+            return false;
         }
 
-        $exportPath = $this->getOrderExportPath($order);
-        $this->updateOrderStatus($order['tg_user_id'], $order, 'issued', [
-            'cert_path' => $exportPath . 'cert.cer',
-            'key_path' => $exportPath . 'key.key',
-            'fullchain_path' => $exportPath . 'fullchain.cer',
-            'last_error' => '',
-            'acme_output' => trim($renewCombined . "\n" . $installCombined),
-            'need_issue' => 0,
-            'need_install' => 0,
-            'retry_count' => 0,
-        ]);
-        $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
-        return true;
+        return $this->markOrderIssued($order, trim($renewCombined . "\n" . $installCombined));
     }
 
     private function processInstallOrders(int $limit): array
@@ -821,7 +898,7 @@ class CertService
             $processed++;
             $this->logDebug('acme_reinstall_start', ['domain' => $order['domain'], 'order_id' => $order['id']]);
             try {
-                $install = $this->acme->installCert($order['domain']);
+                $install = $this->acme->installCert($order['domain'], $this->getOrderExportPath($order));
             } catch (\Throwable $e) {
                 $this->logDebug('acme_reinstall_exception', ['error' => $e->getMessage(), 'order_id' => $order['id']]);
                 $this->recordAcmeFailure($order, $e->getMessage(), [
@@ -845,6 +922,30 @@ class CertService
                 'last_error' => '',
                 'acme_output' => $installOutput,
             ]);
+        }
+
+        return ['processed' => $processed];
+    }
+
+    private function processFailedOrders(int $limit): array
+    {
+        $ttlMinutes = $this->getFailedOrderTtlMinutes();
+        if ($ttlMinutes <= 0) {
+            return ['processed' => 0];
+        }
+
+        $threshold = date('Y-m-d H:i:s', time() - $ttlMinutes * 60);
+        $orders = CertOrder::where('status', 'failed')
+            ->where('updated_at', '<', $threshold)
+            ->order('id', 'asc')
+            ->limit($limit)
+            ->select();
+
+        $processed = 0;
+        foreach ($orders as $order) {
+            if ($this->cleanupFailedOrder($order)) {
+                $processed++;
+            }
         }
 
         return ['processed' => $processed];
@@ -887,6 +988,13 @@ class CertService
         return $limit > 0 ? $limit : 3;
     }
 
+    private function getFailedOrderTtlMinutes(): int
+    {
+        $config = config('tg');
+        $ttl = (int) ($config['failed_order_ttl_minutes'] ?? 0);
+        return $ttl > 0 ? $ttl : 0;
+    }
+
     private function formatCertType(string $type): string
     {
         return $type === 'wildcard' ? '通配符证书' : '根域名证书';
@@ -905,7 +1013,30 @@ class CertService
     {
         $order = $this->normalizeOrderData($order);
         $config = config('tg');
-        return rtrim($config['cert_export_path'], '/') . '/' . ($order['domain'] ?? '') . '/';
+        $key = $this->getOrderExportKey($order);
+        return rtrim($config['cert_export_path'], '/') . '/' . $key . '/';
+    }
+
+    private function getOrderExportKey($order): string
+    {
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        $orderId = (int) ($order['id'] ?? 0);
+        if ($domain === '' || $orderId <= 0) {
+            return trim($domain) !== '' ? $domain : 'unknown';
+        }
+        return "{$domain}_{$orderId}";
+    }
+
+    private function getOrderArchiveName($order): string
+    {
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        $orderId = (int) ($order['id'] ?? 0);
+        if ($domain === '' || $orderId <= 0) {
+            return '';
+        }
+        return "{$domain}_{$orderId}.zip";
     }
 
     private function getDownloadBaseUrl(): string
@@ -972,14 +1103,14 @@ class CertService
         $message = "📌 当前状态：<b>{$statusLabel}</b>\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>";
 
         if ($status === 'dns_wait') {
-            $message .= "\n\n🧾 <b>状态：dns_wait（等待添加 DNS 记录）</b>\n";
+            $message .= "\n\n🧾 <b>状态：待添加 DNS 解析</b>\n";
             $message .= "请添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n";
             $txtValues = $this->getTxtValues($order);
             if (($order['txt_host'] ?? '') && $txtValues !== []) {
                 $message .= $this->formatTxtRecordBlock($order['domain'] ?? '', $order['txt_host'], $txtValues);
             }
         } elseif ($status === 'dns_verified') {
-            $message .= "\n\n✅ <b>状态：dns_verified（DNS 已验证，正在签发）</b>\n请稍后刷新状态。";
+            $message .= "\n\n✅ <b>状态：DNS 已验证</b>\n正在签发，请稍后刷新状态。";
         } elseif ($status === 'created' && ($order['domain'] ?? '') === '') {
             $message .= "\n\n📝 订单未完成，请继续选择证书类型并提交主域名。";
         } elseif ($status === 'created' && ($order['domain'] ?? '') !== '') {
@@ -994,7 +1125,7 @@ class CertService
             }
         } elseif ($status === 'issued') {
             $issuedAt = $order['updated_at'] ?? '';
-            $message .= "\n\n🎉 <b>状态：issued</b>\n";
+            $message .= "\n\n🎉 <b>状态：已签发</b>\n";
             if ($issuedAt) {
                 $message .= "签发时间：{$issuedAt}\n";
             }
@@ -1003,7 +1134,7 @@ class CertService
                 $message .= "\n\n⏳ 重新导出任务已提交，请稍后刷新状态。";
             }
         } elseif ($status === 'failed') {
-            $message .= "\n\n❌ <b>状态：failed</b>\n订单处理失败，请根据错误信息重新申请或取消订单。";
+            $message .= "\n\n❌ <b>状态：处理失败</b>\n订单处理失败，请根据错误信息重新申请或取消订单。";
         }
 
         if (!empty($order['last_error'])) {
@@ -1020,104 +1151,34 @@ class CertService
         $typeText = $order['cert_type'] ? $this->formatCertType($order['cert_type']) : '（未选择）';
         $statusLabel = $this->formatStatusLabel($status);
         $message = "🔖 订单 #{$order['id']}\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>\n状态：<b>{$statusLabel}</b>";
-        $keyboard = null;
-
-        if ($status === 'created') {
-            if ((int) ($order['need_dns_generate'] ?? 0) === 1) {
-                $message .= "\n⏳ DNS 记录生成任务已提交，请稍后刷新状态。";
-                $keyboard = [
-                    [
-                        ['text' => '🔄 刷新状态', 'callback_data' => "status:{$order['id']}"],
-                    ],
-                    [
-                        ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                    ],
-                    [
-                        ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                    ],
-                ];
-            } else {
-                $message .= "\n📝 下一步：生成 DNS TXT 记录。请确认域名是主域名，例如 example.com；通配符证书同样只填主域名。";
-                $keyboard = $this->buildCreatedKeyboard($order);
-            }
-        } elseif ($status === 'dns_wait') {
-            $message .= "\n🧾 请添加 TXT 记录后点击验证：\n";
-            $txtValues = $this->getTxtValues($order);
-            if ($order['txt_host'] && $txtValues !== []) {
-                $message .= $this->formatTxtRecordBlock($order['domain'], $order['txt_host'], $txtValues);
-            }
-            $keyboard = [
-                [
-                    ['text' => '✅ 我已解析，开始验证', 'callback_data' => "verify:{$order['id']}"],
-                ],
-                [
-                    ['text' => '🔁 重新生成DNS记录', 'callback_data' => "created:retry:{$order['id']}"],
-                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        } elseif ($status === 'dns_verified') {
-            $message .= "\n✅ DNS 已验证，正在签发，请稍后刷新状态。";
-            $keyboard = [
-                [
-                    ['text' => '🔄 刷新状态', 'callback_data' => "status:{$order['id']}"],
-                ],
-                [
-                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        } elseif ($status === 'issued') {
-            $issuedAt = $order['updated_at'] ?? '';
-            $message .= "\n🎉 已签发完成";
-            if ($issuedAt) {
-                $message .= "\n签发时间：{$issuedAt}";
-            }
-            $message .= "\n" . $this->buildDownloadFilesMessage($order);
-            if ((int) ($order['need_install'] ?? 0) === 1) {
-                $message .= "\n⏳ 重新导出任务已提交，请稍后刷新状态。";
-            }
-            $keyboard = [
-                [
-                    ['text' => 'fullchain.cer', 'callback_data' => "file:fullchain:{$order['id']}"],
-                    ['text' => 'cert.cer', 'callback_data' => "file:cert:{$order['id']}"],
-                    ['text' => 'key.key', 'callback_data' => "file:key:{$order['id']}"],
-                    ['text' => 'ca.cer', 'callback_data' => "file:ca:{$order['id']}"],
-                ],
-                [
-                    ['text' => '查看证书信息', 'callback_data' => "info:{$order['id']}"],
-                    ['text' => '查看文件路径', 'callback_data' => "download:{$order['id']}"],
-                ],
-                [
-                    ['text' => '重新导出', 'callback_data' => "reinstall:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        } elseif ($status === 'failed') {
-            $message .= "\n❌ 订单处理失败，请根据错误信息重新申请或取消订单。";
-            $keyboard = [
-                [
-                    ['text' => '🆕 重新申请证书', 'callback_data' => 'menu:new'],
-                ],
-                [
-                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        }
 
         return [
             'text' => $message,
-            'keyboard' => $keyboard,
+            'keyboard' => [
+                [
+                    ['text' => '查看详情/操作', 'callback_data' => "status:{$order['id']}"],
+                ],
+            ],
         ];
+    }
+
+    private function buildOrdersPaginationKeyboard(int $page, int $totalPages): ?array
+    {
+        if ($totalPages <= 1) {
+            return null;
+        }
+
+        $buttons = [];
+        if ($page > 1) {
+            $prevPage = $page - 1;
+            $buttons[] = ['text' => '⬅️ 上一页', 'callback_data' => "menu:orders:{$prevPage}"];
+        }
+        if ($page < $totalPages) {
+            $nextPage = $page + 1;
+            $buttons[] = ['text' => '下一页 ➡️', 'callback_data' => "menu:orders:{$nextPage}"];
+        }
+
+        return $buttons !== [] ? [$buttons] : null;
     }
 
     private function formatTxtRecordBlock(string $domain, string $host, array $values): string
@@ -1135,6 +1196,8 @@ class CertService
         if ($valueCount > 1) {
             $message .= "⚠️ 当前需要添加 <b>{$valueCount}</b> 条 TXT 记录，请全部添加后再验证。\n";
             $message .= "✅ DNS 允许同一个主机记录（_acme-challenge）存在多条 TXT 记录值，请放心添加。\n";
+        } elseif ($valueCount === 1) {
+            $message .= "✅ 当前仅需添加 1 条 TXT 记录，根域名与通配符会共用同一条记录。\n";
         }
         $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
@@ -1143,28 +1206,22 @@ class CertService
     private function buildDownloadFilesMessage($order): string
     {
         $order = $this->normalizeOrderData($order);
-        $exportPath = $this->getOrderExportPath($order);
-        $lines = [
-            '下载文件：',
-            "fullchain.cer -> {$this->buildDownloadUrl($order, 'fullchain.cer')}",
-            "cert.cer -> {$this->buildDownloadUrl($order, 'cert.cer')}",
-            "key.key -> {$this->buildDownloadUrl($order, 'key.key')}",
-            "ca.cer -> {$this->buildDownloadUrl($order, 'ca.cer')}",
-        ];
-        $lines[] = '';
-        $lines[] = '服务器路径：';
-        $lines[] = "fullchain.cer -> {$exportPath}fullchain.cer";
-        $lines[] = "cert.cer -> {$exportPath}cert.cer";
-        $lines[] = "key.key -> {$exportPath}key.key";
-        $lines[] = "ca.cer -> {$exportPath}ca.cer";
-        return "<pre>" . implode("\n", $lines) . "</pre>";
+        $archiveName = $this->ensureCertificateArchive($order);
+        if (!$archiveName) {
+            return "下载压缩包：暂未生成，请稍后刷新状态。";
+        }
+        $archiveUrl = $this->buildDownloadUrl($order, $archiveName);
+        $message = "下载压缩包：<a href=\"{$archiveUrl}\">点击下载</a>\n";
+        $message .= "复制链接：\n<pre>{$archiveUrl}</pre>";
+        return $message;
     }
 
     private function buildDownloadUrl($order, string $filename): string
     {
         $order = $this->normalizeOrderData($order);
         $base = rtrim($this->getDownloadBaseUrl(), '/');
-        return "{$base}/" . ($order['domain'] ?? '') . "/{$filename}";
+        $key = $this->getOrderExportKey($order);
+        return "{$base}/{$key}/{$filename}";
     }
 
     private function buildCreatedKeyboard(CertOrder $order): array
@@ -1217,11 +1274,11 @@ class CertService
     private function formatStatusLabel(string $status): string
     {
         $map = [
-            'created' => 'created（待完善）',
-            'dns_wait' => 'dns_wait（等待添加 DNS 记录）',
-            'dns_verified' => 'dns_verified（DNS 已验证）',
-            'issued' => 'issued（已签发）',
-            'failed' => 'failed（处理失败）',
+            'created' => '待完善',
+            'dns_wait' => '待添加 DNS 解析',
+            'dns_verified' => 'DNS 已验证',
+            'issued' => '已签发',
+            'failed' => '处理失败',
         ];
 
         return $map[$status] ?? $status;
@@ -1257,8 +1314,145 @@ class CertService
         return strpos($output, 'incorrect txt record') !== false;
     }
 
-    private function isOrderStale(CertOrder $order, int $minutes = 30): bool
+    private function isCertSuccessOutput(string $output): bool
     {
+        $output = strtolower($output);
+        return strpos($output, 'cert success') !== false
+            || strpos($output, 'your cert is in') !== false
+            || strpos($output, 'full-chain cert is in') !== false;
+    }
+
+    private function isExistingCertOutput(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'seems to already have an ecc cert') !== false;
+    }
+
+    private function isInstallSuccessOutput(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'installing cert to') !== false
+            && strpos($output, 'installing key to') !== false
+            && strpos($output, 'installing full chain to') !== false;
+    }
+
+    private function handleExistingCert(CertOrder $order, string $acmeOutput): void
+    {
+        $recent = ActionLog::where('tg_user_id', $order['tg_user_id'])
+            ->where('action', 'order_existing_cert')
+            ->where('detail', $order['domain'])
+            ->order('id', 'desc')
+            ->find();
+        if ($recent && !empty($recent['created_at'])) {
+            $timestamp = strtotime($recent['created_at']);
+            if ($timestamp && (time() - $timestamp) < 600) {
+                $this->updateOrderStatus($order['tg_user_id'], $order, 'failed', [
+                    'need_dns_generate' => 0,
+                    'need_issue' => 0,
+                    'need_install' => 0,
+                    'retry_count' => 0,
+                    'last_error' => '检测到已有证书，请稍后再试或取消订单重新申请。',
+                    'txt_host' => '',
+                    'txt_value' => '',
+                    'txt_values_json' => '',
+                    'acme_output' => $acmeOutput,
+                ]);
+                $this->log($order['tg_user_id'], 'order_existing_cert_blocked', $order['domain']);
+                return;
+            }
+        }
+
+        $this->log($order['tg_user_id'], 'order_existing_cert', $order['domain']);
+        $this->acme->removeOrder($order['domain']);
+        $domain = $order['domain'];
+        $certType = $order['cert_type'];
+        $order->delete();
+
+        $user = TgUser::where('id', $order['tg_user_id'])->find();
+        if (!$user) {
+            return;
+        }
+
+        $newOrder = CertOrder::create([
+            'tg_user_id' => $order['tg_user_id'],
+            'domain' => $domain,
+            'cert_type' => $certType,
+            'status' => 'created',
+        ]);
+        $this->log($order['tg_user_id'], 'order_recreate', $domain);
+        $this->issueOrder($user, $newOrder);
+    }
+
+    private function cleanupFailedOrder(CertOrder $order): bool
+    {
+        $user = TgUser::where('id', $order['tg_user_id'])->find();
+        $shouldRefund = $order['domain'] !== '' && !$this->isUnlimitedUser($user);
+        if ($shouldRefund && $user) {
+            $user->save(['apply_quota' => (int) $user['apply_quota'] + 1]);
+        }
+        $order->delete();
+        $this->log($order['tg_user_id'], 'order_auto_cancel', (string) $order['id']);
+        return true;
+    }
+
+    private function installOrExportCert(CertOrder $order): ?string
+    {
+        $exportError = '';
+        if (!$this->ensureOrderExportDir($order, $exportError)) {
+            $this->recordAcmeFailure($order, $exportError);
+            return null;
+        }
+
+        $install = $this->acme->installCert($order['domain'], $this->getOrderExportPath($order));
+        $installStderr = $install['stderr'] ?? '';
+        $installOutput = $install['output'] ?? '';
+        $installCombined = trim($installOutput . "\n" . $installStderr);
+        $installSuccess = (bool) ($install['success'] ?? false);
+        if (!$installSuccess && $this->isInstallSuccessOutput($installCombined)) {
+            $installSuccess = true;
+        }
+        if (!$installSuccess) {
+            $this->logDebug('acme_install_failed', ['order_id' => $order['id'], 'output' => $installCombined]);
+            return null;
+        }
+
+        return $installCombined;
+    }
+
+    private function markOrderIssued(CertOrder $order, string $acmeOutput): bool
+    {
+        $exportPath = $this->getOrderExportPath($order);
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'issued', [
+            'cert_path' => $exportPath . 'cert.cer',
+            'key_path' => $exportPath . 'key.key',
+            'fullchain_path' => $exportPath . 'fullchain.cer',
+            'last_error' => '',
+            'acme_output' => $acmeOutput,
+            'need_dns_generate' => 0,
+            'need_issue' => 0,
+            'need_install' => 0,
+            'retry_count' => 0,
+        ]);
+        $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
+        return true;
+    }
+
+    private function ensureOrderExportDir(CertOrder $order, ?string &$error = null): bool
+    {
+        $path = $this->getOrderExportPath($order);
+        if (@is_dir($path)) {
+            return true;
+        }
+        if (!@mkdir($path, 0755, true) && !@is_dir($path)) {
+            $error = "证书已签发但导出目录不可用，请检查 CERT_EXPORT_PATH：{$path}";
+            return false;
+        }
+        return true;
+    }
+
+    private function isOrderStale($order, int $minutes = 30): bool
+    {
+        $order = $this->normalizeOrderData($order);
         if (empty($order['updated_at'])) {
             return false;
         }
@@ -1267,6 +1461,70 @@ class CertService
             return false;
         }
         return $updated < (time() - $minutes * 60);
+    }
+
+    public function isOrderCoolingDown($order, int $seconds = 8): bool
+    {
+        $order = $this->normalizeOrderData($order);
+        if (empty($order['updated_at'])) {
+            return false;
+        }
+        $updated = strtotime($order['updated_at']);
+        if (!$updated) {
+            return false;
+        }
+        return $updated > (time() - $seconds);
+    }
+
+    private function ensureCertificateArchive($order): ?string
+    {
+        if (!class_exists(\ZipArchive::class)) {
+            return null;
+        }
+
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        if ($domain === '') {
+            return null;
+        }
+
+        $exportPath = $this->getOrderExportPath($order);
+        $files = ['fullchain.cer', 'cert.cer', 'key.key', 'ca.cer'];
+        $latestMtime = 0;
+        foreach ($files as $file) {
+            $path = $exportPath . $file;
+            if (!@is_file($path)) {
+                return null;
+            }
+            $mtime = @filemtime($path);
+            if ($mtime !== false) {
+                $latestMtime = max($latestMtime, $mtime);
+            }
+        }
+
+        $archiveName = $this->getOrderArchiveName($order);
+        if ($archiveName === '') {
+            return null;
+        }
+        $archivePath = $exportPath . $archiveName;
+        if (@is_file($archivePath)) {
+            $archiveMtime = @filemtime($archivePath);
+            if ($archiveMtime !== false && $archiveMtime >= $latestMtime) {
+                return $archiveName;
+            }
+        }
+
+        $zip = new \ZipArchive();
+        if ($zip->open($archivePath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            return null;
+        }
+
+        foreach ($files as $file) {
+            $zip->addFile($exportPath . $file, $file);
+        }
+
+        $zip->close();
+        return $archiveName;
     }
 
     private function getTxtValues($order): array
@@ -1316,6 +1574,24 @@ class CertService
         }
 
         return null;
+    }
+
+    private function sanitizeDomainInput(string $domain, ?bool &$hadNoise = null): string
+    {
+        $clean = strip_tags($domain);
+        $clean = trim($clean);
+        $normalized = preg_replace('/[\s\p{Cc}\x{200B}\x{FEFF}]+/u', '', $clean);
+        $hadNoise = $normalized !== $clean;
+        return strtolower($normalized ?? '');
+    }
+
+    private function domainFormatErrorMessage(bool $hadNoise): string
+    {
+        $message = '❌ 域名格式错误，请检查后重试。';
+        if ($hadNoise) {
+            $message .= "\n⚠️ 检测到输入包含空格或不可见字符，请删除后重新发送。";
+        }
+        return $message;
     }
 
     private function updateOrderStatus(int $userId, CertOrder $order, string $status, array $extra = []): void
