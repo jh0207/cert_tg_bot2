@@ -151,6 +151,16 @@ class AcmeService
         ];
     }
 
+    public function removeOrder(string $domain): array
+    {
+        return $this->run([
+            $this->acmePath,
+            '--remove',
+            '-d',
+            $domain,
+        ]);
+    }
+
     private function run(array $args): array
     {
         $safeArgs = array_map('escapeshellarg', $args);
@@ -246,7 +256,7 @@ class AcmeService
     private function ensureExportDir(string $domain): void
     {
         $dir = $this->exportPath . $domain;
-        if (!is_dir($dir)) {
+        if (!@is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
     }

@@ -783,7 +783,6 @@ class Bot
             }
 
             $domain = $domainInput ?? $text;
-            $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
             $result = $this->certService->submitDomain($user['id'], $domain);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -830,7 +829,6 @@ class Bot
                 'order_id' => $order['id'],
                 'domain' => $domain,
             ]);
-            $this->sendProcessingMessage($chatId, '✅ 任务已提交，稍后展示 DNS TXT 记录。');
             $result = $this->certService->submitDomain($user['id'], $domain);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
