@@ -76,4 +76,20 @@ class TelegramService
         curl_exec($ch);
         curl_close($ch);
     }
+
+    public function setMyCommands(array $commands): void
+    {
+        $url = $this->apiBase . '/bot' . $this->token . '/setMyCommands';
+        $payload = [
+            'commands' => json_encode($commands, JSON_UNESCAPED_UNICODE),
+        ];
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($payload));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_exec($ch);
+        curl_close($ch);
+    }
 }

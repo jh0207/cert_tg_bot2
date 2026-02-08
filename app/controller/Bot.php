@@ -81,6 +81,7 @@ class Bot
                 $messageText = "👋 <b>欢迎使用证书机器人</b>\n";
                 $messageText .= "当前角色：<b>{$role}</b>\n\n";
                 $messageText .= "请选择操作👇";
+                $this->registerBotCommands();
                 $this->sendMainMenu($chatId, $messageText);
                 return;
             }
@@ -99,16 +100,16 @@ class Bot
                         '',
                         '📌 <b>常用按钮</b>',
                         '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                        'created 阶段：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
-                        'dns_wait 阶段：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                        'dns_verified 阶段：等待后台签发 / 刷新状态',
-                        'issued 阶段：下载文件、查看证书信息、查看文件路径/重新导出',
+                        '待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
+                        '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                        'DNS 已验证：等待后台签发 / 刷新状态',
+                        '已签发：下载文件、查看证书信息、重新导出',
                         '',
                         '📌 <b>状态说明</b>',
-                        'created：订单未完成，需选择证书类型并提交主域名。',
-                        'dns_wait：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
-                        'dns_verified：DNS 已验证，系统自动签发，等待完成。',
-                        'issued：证书已签发，可下载文件。',
+                        '待完善：订单未完成，需选择证书类型并提交主域名。',
+                        '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
+                        'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
+                        '已签发：证书已签发，可下载文件。',
                     ]);
                     $this->sendMainMenu($chatId, $help);
                 } else {
@@ -117,15 +118,15 @@ class Bot
                         '',
                         '📌 <b>常用按钮</b>',
                         '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                        'created：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
-                        'dns_wait：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                        'dns_verified：🔄 刷新状态',
-                        'issued：下载文件、查看证书信息、查看文件路径/重新导出',
+                        '待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
+                        '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                        'DNS 已验证：🔄 刷新状态',
+                        '已签发：下载文件、查看证书信息、重新导出',
                         '',
-                        'created：请选择证书类型并提交主域名。',
-                        'dns_wait：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
-                        'dns_verified：DNS 已验证，系统自动签发，请稍后刷新状态。',
-                        'issued：证书已签发，使用下方按钮下载。',
+                        '待完善：请选择证书类型并提交主域名。',
+                        '待添加 DNS 解析：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
+                        'DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。',
+                        '已签发：证书已签发，使用下方按钮下载。',
                         '',
                         '提示：任何时候都可以通过订单列表继续或取消订单。',
                     ]);
@@ -498,16 +499,16 @@ class Bot
                             '',
                             '📌 <b>常用按钮</b>',
                             '🆕 申请证书 / 📂 我的订单 / 📖 使用帮助',
-                            'created 阶段：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
-                            'dns_wait 阶段：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                            'dns_verified 阶段：等待后台签发 / 刷新状态',
-                            'issued 阶段：下载文件、查看证书信息、重新导出',
+                            '待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单',
+                            '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                            'DNS 已验证：等待后台签发 / 刷新状态',
+                            '已签发：下载文件、查看证书信息、重新导出',
                             '',
                             '📌 <b>状态说明</b>',
-                            'created：订单未完成，需选择证书类型并提交主域名。',
-                            'dns_wait：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
-                            'dns_verified：DNS 已验证，系统自动签发，等待完成。',
-                            'issued：证书已签发，可下载文件。',
+                            '待完善：订单未完成，需选择证书类型并提交主域名。',
+                            '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
+                            'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
+                            '已签发：证书已签发，可下载文件。',
                         ]);
                         $this->sendMainMenu($chatId, $help);
                     } else {
@@ -516,14 +517,14 @@ class Bot
                             "📖 <b>使用帮助</b>\n\n" .
                             "📌 <b>常用按钮</b>\n" .
                             "🆕 申请证书 / 📂 我的订单 / 📖 使用帮助\n" .
-                            "created：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单\n" .
-                            "dns_wait：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单\n" .
-                            "dns_verified：🔄 刷新状态 / ❌ 取消订单\n" .
-                            "issued：下载文件、查看证书信息、重新导出\n\n" .
-                            "created：请选择证书类型并提交主域名。\n" .
-                            "dns_wait：按提示添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n" .
-                            "dns_verified：DNS 已验证，系统自动签发，请稍后刷新状态。\n" .
-                            "issued：证书已签发，使用下方按钮下载。\n\n" .
+                            "待完善：选择证书类型、提交主域名、提交生成 DNS 记录任务、取消订单\n" .
+                            "待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单\n" .
+                            "DNS 已验证：🔄 刷新状态 / ❌ 取消订单\n" .
+                            "已签发：下载文件、查看证书信息、重新导出\n\n" .
+                            "待完善：请选择证书类型并提交主域名。\n" .
+                            "待添加 DNS 解析：按提示添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n" .
+                            "DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。\n" .
+                            "已签发：证书已签发，使用下方按钮下载。\n\n" .
                             "提示：任何时候都可以通过订单列表继续或取消订单。"
                         );
                     }
@@ -721,6 +722,17 @@ class Bot
     private function sendMainMenu(int $chatId, string $text): void
     {
         $this->telegram->sendMessageWithReplyKeyboard($chatId, $text, $this->buildReplyMenuKeyboard());
+    }
+
+    private function registerBotCommands(): void
+    {
+        $this->telegram->setMyCommands([
+            ['command' => 'start', 'description' => '开始使用/打开菜单'],
+            ['command' => 'new', 'description' => '申请证书'],
+            ['command' => 'orders', 'description' => '查看订单记录'],
+            ['command' => 'status', 'description' => '查询订单状态'],
+            ['command' => 'help', 'description' => '使用帮助'],
+        ]);
     }
 
     private function extractCommandArgument(string $text, string $command): ?string

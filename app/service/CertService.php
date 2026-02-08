@@ -659,7 +659,7 @@ class CertService
 
         $messages = [
             [
-                'text' => "📂 <b>证书订单记录</b>\n点击订单按钮查看/操作。",
+                'text' => "📂 <b>证书订单记录</b>\n如需查看某个订单详情，请发送 /status 域名。",
                 'keyboard' => null,
             ],
         ];
@@ -1106,103 +1106,10 @@ class CertService
         $typeText = $order['cert_type'] ? $this->formatCertType($order['cert_type']) : '（未选择）';
         $statusLabel = $this->formatStatusLabel($status);
         $message = "🔖 订单 #{$order['id']}\n域名：<b>{$domain}</b>\n证书类型：<b>{$typeText}</b>\n状态：<b>{$statusLabel}</b>";
-        $keyboard = null;
-
-        if ($status === 'created') {
-            if ((int) ($order['need_dns_generate'] ?? 0) === 1) {
-                $message .= "\n⏳ DNS 记录生成任务已提交，请稍后刷新状态。";
-                $keyboard = [
-                    [
-                        ['text' => '🔄 刷新状态', 'callback_data' => "status:{$order['id']}"],
-                    ],
-                    [
-                        ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                    ],
-                    [
-                        ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                    ],
-                ];
-            } else {
-                $message .= "\n📝 下一步：生成 DNS TXT 记录。请确认域名是主域名，例如 example.com；通配符证书同样只填主域名。";
-                $keyboard = $this->buildCreatedKeyboard($order);
-            }
-        } elseif ($status === 'dns_wait') {
-            $message .= "\n🧾 请添加 TXT 记录后点击验证：\n";
-            $txtValues = $this->getTxtValues($order);
-            if ($order['txt_host'] && $txtValues !== []) {
-                $message .= $this->formatTxtRecordBlock($order['domain'], $order['txt_host'], $txtValues);
-            }
-            $keyboard = [
-                [
-                    ['text' => '✅ 我已解析，开始验证', 'callback_data' => "verify:{$order['id']}"],
-                ],
-                [
-                    ['text' => '🔁 重新生成DNS记录', 'callback_data' => "created:retry:{$order['id']}"],
-                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        } elseif ($status === 'dns_verified') {
-            $message .= "\n✅ DNS 已验证，正在签发，请稍后刷新状态。";
-            $keyboard = [
-                [
-                    ['text' => '🔄 刷新状态', 'callback_data' => "status:{$order['id']}"],
-                ],
-                [
-                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        } elseif ($status === 'issued') {
-            $issuedAt = $order['updated_at'] ?? '';
-            $message .= "\n🎉 已签发完成";
-            if ($issuedAt) {
-                $message .= "\n签发时间：{$issuedAt}";
-            }
-            $message .= "\n" . $this->buildDownloadFilesMessage($order);
-            if ((int) ($order['need_install'] ?? 0) === 1) {
-                $message .= "\n⏳ 重新导出任务已提交，请稍后刷新状态。";
-            }
-            $keyboard = [
-                [
-                    ['text' => 'fullchain.cer', 'callback_data' => "file:fullchain:{$order['id']}"],
-                    ['text' => 'cert.cer', 'callback_data' => "file:cert:{$order['id']}"],
-                    ['text' => 'key.key', 'callback_data' => "file:key:{$order['id']}"],
-                    ['text' => 'ca.cer', 'callback_data' => "file:ca:{$order['id']}"],
-                ],
-                [
-                    ['text' => '查看证书信息', 'callback_data' => "info:{$order['id']}"],
-                    ['text' => '查看文件路径', 'callback_data' => "download:{$order['id']}"],
-                ],
-                [
-                    ['text' => '重新导出', 'callback_data' => "reinstall:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        } elseif ($status === 'failed') {
-            $message .= "\n❌ 订单处理失败，请根据错误信息重新申请或取消订单。";
-            $keyboard = [
-                [
-                    ['text' => '🆕 重新申请证书', 'callback_data' => 'menu:new'],
-                ],
-                [
-                    ['text' => '❌ 取消订单', 'callback_data' => "cancel:{$order['id']}"],
-                ],
-                [
-                    ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
-                ],
-            ];
-        }
 
         return [
             'text' => $message,
-            'keyboard' => $keyboard,
+            'keyboard' => null,
         ];
     }
 
