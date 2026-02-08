@@ -79,6 +79,16 @@ class Bot
             }
             $domainInput = $this->extractCommandArgument($text, '/domain');
 
+            if ($text === '🆕 申请证书') {
+                $text = '/new';
+            } elseif ($text === '📂 我的订单') {
+                $text = '/orders';
+            } elseif ($text === '🔎 查询状态') {
+                $text = '/status';
+            } elseif ($text === '📖 使用帮助') {
+                $text = '/help';
+            }
+
             if (strpos($text, '/start') === 0) {
                 $role = $user['role'];
                 $messageText = "👋 <b>欢迎使用证书机器人</b>\n";
@@ -744,6 +754,20 @@ class Bot
 
     private function buildIssuedKeyboard(int $orderId, ?int $userId = null): array
     {
+        $downloadButton = null;
+        if ($userId) {
+            $zipUrl = $this->certService->getOrderZipUrl($userId, $orderId);
+            if ($zipUrl) {
+                $downloadButton = ['text' => '⬇️ 下载压缩包', 'url' => $zipUrl];
+            }
+        }
+
+        $firstRow = [];
+        if ($downloadButton) {
+            $firstRow[] = $downloadButton;
+        }
+        $firstRow[] = ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"];
+
         return [
             [
                 ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"],
@@ -925,6 +949,19 @@ class Bot
     private function handlePendingInput(array $user, array $message, int $chatId, string $text): bool
     {
         if ($user['pending_action'] === '') {
+            return false;
+        }
+
+        $menuTexts = ['🆕 申请证书', '📂 我的订单', '🔎 查询状态', '📖 使用帮助'];
+        $menuCommands = ['/start', '/help', '/orders', '/new', '/status'];
+        foreach ($menuCommands as $command) {
+            if (strpos($text, $command) === 0) {
+                $this->clearPendingAction($user['id']);
+                return false;
+            }
+        }
+        if (in_array($text, $menuTexts, true)) {
+            $this->clearPendingAction($user['id']);
             return false;
         }
 
