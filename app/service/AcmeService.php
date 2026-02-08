@@ -151,6 +151,16 @@ class AcmeService
         ];
     }
 
+    public function removeOrder(string $domain): array
+    {
+        return $this->run([
+            $this->acmePath,
+            '--remove',
+            '-d',
+            $domain,
+        ]);
+    }
+
     private function run(array $args): array
     {
         $safeArgs = array_map('escapeshellarg', $args);
