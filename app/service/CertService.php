@@ -20,10 +20,11 @@ class CertService
 
     public function createOrder(array $from, string $domain): array
     {
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
-            return ['success' => false, 'message' => '❌ 域名格式错误，请检查后重试。'];
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
         }
         $typeError = $this->validateDomainByType($domain, 'root');
         if ($typeError) {
@@ -163,11 +164,11 @@ class CertService
 
     public function submitDomain(int $userId, string $domain): array
     {
-        $domain = strip_tags($domain);
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
         $validator = new DomainValidate();
         if (!$validator->check(['domain' => $domain])) {
-            return ['success' => false, 'message' => '❌ 域名格式错误，请检查后重试。'];
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
         }
 
         $user = TgUser::where('id', $userId)->find();
@@ -461,6 +462,13 @@ class CertService
                 'order' => $latest,
             ];
         }
+        if ($latest && $latest['status'] === 'issued') {
+            return [
+                'success' => true,
+                'message' => $this->buildOrderStatusMessage($latest, true),
+                'order' => $latest,
+            ];
+        }
 
         return [
             'success' => true,
@@ -471,7 +479,11 @@ class CertService
 
     public function verifyOrder(array $from, string $domain): array
     {
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
+        if ($domain === '') {
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
+        }
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
@@ -549,7 +561,11 @@ class CertService
 
     public function status(array $from, string $domain): array
     {
-        $domain = strtolower(trim($domain));
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
+        if ($domain === '') {
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
+        }
         $user = TgUser::where('tg_id', $from['id'])->find();
         if (!$user) {
             return ['success' => false, 'message' => '❌ 请先发送 /start 绑定账号。'];
@@ -596,6 +612,11 @@ class CertService
 
     public function statusByDomain(string $domain): array
     {
+        $domainHadNoise = false;
+        $domain = $this->sanitizeDomainInput($domain, $domainHadNoise);
+        if ($domain === '') {
+            return ['success' => false, 'message' => $this->domainFormatErrorMessage($domainHadNoise)];
+        }
         $order = CertOrder::where('domain', $domain)->find();
         if (!$order) {
             return ['success' => false, 'message' => '❌ 订单不存在。'];
@@ -693,6 +714,16 @@ class CertService
         $stderr = $result['stderr'] ?? '';
         $output = $result['output'] ?? '';
         $combinedOutput = trim($output . "\n" . $stderr);
+        if ($this->isCertSuccessOutput($combinedOutput)) {
+            $installOutput = $this->installOrExportCert($order);
+            if ($installOutput === null) {
+                $this->recordAcmeFailure($order, '证书已签发但导出失败，请稍后重试。', [
+                    'acme_output' => $combinedOutput,
+                ]);
+                return false;
+            }
+            return $this->markOrderIssued($order, trim($combinedOutput . "\n" . $installOutput));
+        }
         $txt = $this->dns->parseTxtRecords($combinedOutput);
         if (!$txt) {
             if (!($result['success'] ?? false)) {
@@ -757,7 +788,15 @@ class CertService
         $renewStderr = $renew['stderr'] ?? '';
         $renewOutput = $renew['output'] ?? '';
         $renewCombined = trim($renewOutput . "\n" . $renewStderr);
-        if (!($renew['success'] ?? false)) {
+        if ($this->isExistingCertOutput($renewCombined)) {
+            $this->resetOrderForExistingCert($order, $renewCombined);
+            return false;
+        }
+        $renewSuccess = (bool) ($renew['success'] ?? false);
+        if (!$renewSuccess && $this->isCertSuccessOutput($renewCombined)) {
+            $renewSuccess = true;
+        }
+        if (!$renewSuccess) {
             if ($this->isTxtMismatchError($renewCombined)) {
                 $order->save([
                     'status' => 'dns_wait',
@@ -785,27 +824,10 @@ class CertService
             $this->recordAcmeFailure($order, $this->resolveAcmeError($installStderr, $installOutput), [
                 'acme_output' => $installCombined,
             ]);
-            $fallback = $this->acme->exportExistingCert($order['domain']);
-            if (!($fallback['success'] ?? false)) {
-                $this->logDebug('acme_export_failed', ['order_id' => $order['id'], 'output' => $fallback['output'] ?? '']);
-                return false;
-            }
-            $installCombined = trim($installCombined . "\n" . ($fallback['output'] ?? ''));
+            return false;
         }
 
-        $exportPath = $this->getOrderExportPath($order);
-        $this->updateOrderStatus($order['tg_user_id'], $order, 'issued', [
-            'cert_path' => $exportPath . 'cert.cer',
-            'key_path' => $exportPath . 'key.key',
-            'fullchain_path' => $exportPath . 'fullchain.cer',
-            'last_error' => '',
-            'acme_output' => trim($renewCombined . "\n" . $installCombined),
-            'need_issue' => 0,
-            'need_install' => 0,
-            'retry_count' => 0,
-        ]);
-        $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
-        return true;
+        return $this->markOrderIssued($order, trim($renewCombined . "\n" . $installCombined));
     }
 
     private function processInstallOrders(int $limit): array
@@ -1144,6 +1166,7 @@ class CertService
     {
         $order = $this->normalizeOrderData($order);
         $exportPath = $this->getOrderExportPath($order);
+        $archiveName = $this->ensureCertificateArchive($order);
         $lines = [
             '下载文件：',
             "fullchain.cer -> {$this->buildDownloadUrl($order, 'fullchain.cer')}",
@@ -1151,12 +1174,18 @@ class CertService
             "key.key -> {$this->buildDownloadUrl($order, 'key.key')}",
             "ca.cer -> {$this->buildDownloadUrl($order, 'ca.cer')}",
         ];
+        if ($archiveName) {
+            $lines[] = "{$archiveName} -> {$this->buildDownloadUrl($order, $archiveName)}";
+        }
         $lines[] = '';
         $lines[] = '服务器路径：';
         $lines[] = "fullchain.cer -> {$exportPath}fullchain.cer";
         $lines[] = "cert.cer -> {$exportPath}cert.cer";
         $lines[] = "key.key -> {$exportPath}key.key";
         $lines[] = "ca.cer -> {$exportPath}ca.cer";
+        if ($archiveName) {
+            $lines[] = "{$archiveName} -> {$exportPath}{$archiveName}";
+        }
         return "<pre>" . implode("\n", $lines) . "</pre>";
     }
 
@@ -1257,8 +1286,71 @@ class CertService
         return strpos($output, 'incorrect txt record') !== false;
     }
 
-    private function isOrderStale(CertOrder $order, int $minutes = 30): bool
+    private function isCertSuccessOutput(string $output): bool
     {
+        $output = strtolower($output);
+        return strpos($output, 'cert success') !== false
+            || strpos($output, 'your cert is in') !== false
+            || strpos($output, 'full-chain cert is in') !== false;
+    }
+
+    private function isExistingCertOutput(string $output): bool
+    {
+        $output = strtolower($output);
+        return strpos($output, 'seems to already have an ecc cert') !== false;
+    }
+
+    private function resetOrderForExistingCert(CertOrder $order, string $acmeOutput): void
+    {
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'created', [
+            'need_dns_generate' => 1,
+            'need_issue' => 0,
+            'need_install' => 0,
+            'retry_count' => 0,
+            'last_error' => '检测到已有证书，已重新下单申请，请稍后刷新状态。',
+            'txt_host' => '',
+            'txt_value' => '',
+            'txt_values_json' => '',
+            'acme_output' => $acmeOutput,
+        ]);
+        $this->log($order['tg_user_id'], 'order_reset', $order['domain']);
+    }
+
+    private function installOrExportCert(CertOrder $order): ?string
+    {
+        $install = $this->acme->installCert($order['domain']);
+        $installStderr = $install['stderr'] ?? '';
+        $installOutput = $install['output'] ?? '';
+        $installCombined = trim($installOutput . "\n" . $installStderr);
+        if (!($install['success'] ?? false)) {
+            $this->logDebug('acme_install_failed', ['order_id' => $order['id'], 'output' => $installCombined]);
+            return null;
+        }
+
+        return $installCombined;
+    }
+
+    private function markOrderIssued(CertOrder $order, string $acmeOutput): bool
+    {
+        $exportPath = $this->getOrderExportPath($order);
+        $this->updateOrderStatus($order['tg_user_id'], $order, 'issued', [
+            'cert_path' => $exportPath . 'cert.cer',
+            'key_path' => $exportPath . 'key.key',
+            'fullchain_path' => $exportPath . 'fullchain.cer',
+            'last_error' => '',
+            'acme_output' => $acmeOutput,
+            'need_dns_generate' => 0,
+            'need_issue' => 0,
+            'need_install' => 0,
+            'retry_count' => 0,
+        ]);
+        $this->log($order['tg_user_id'], 'order_issued', $order['domain']);
+        return true;
+    }
+
+    private function isOrderStale($order, int $minutes = 30): bool
+    {
+        $order = $this->normalizeOrderData($order);
         if (empty($order['updated_at'])) {
             return false;
         }
@@ -1267,6 +1359,54 @@ class CertService
             return false;
         }
         return $updated < (time() - $minutes * 60);
+    }
+
+    private function ensureCertificateArchive($order): ?string
+    {
+        if (!class_exists(\ZipArchive::class)) {
+            return null;
+        }
+
+        $order = $this->normalizeOrderData($order);
+        $domain = $order['domain'] ?? '';
+        if ($domain === '') {
+            return null;
+        }
+
+        $exportPath = $this->getOrderExportPath($order);
+        $files = ['fullchain.cer', 'cert.cer', 'key.key', 'ca.cer'];
+        $latestMtime = 0;
+        foreach ($files as $file) {
+            $path = $exportPath . $file;
+            if (!@is_file($path)) {
+                return null;
+            }
+            $mtime = @filemtime($path);
+            if ($mtime !== false) {
+                $latestMtime = max($latestMtime, $mtime);
+            }
+        }
+
+        $archiveName = "{$domain}.zip";
+        $archivePath = $exportPath . $archiveName;
+        if (@is_file($archivePath)) {
+            $archiveMtime = @filemtime($archivePath);
+            if ($archiveMtime !== false && $archiveMtime >= $latestMtime) {
+                return $archiveName;
+            }
+        }
+
+        $zip = new \ZipArchive();
+        if ($zip->open($archivePath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            return null;
+        }
+
+        foreach ($files as $file) {
+            $zip->addFile($exportPath . $file, $file);
+        }
+
+        $zip->close();
+        return $archiveName;
     }
 
     private function getTxtValues($order): array
@@ -1316,6 +1456,24 @@ class CertService
         }
 
         return null;
+    }
+
+    private function sanitizeDomainInput(string $domain, ?bool &$hadNoise = null): string
+    {
+        $clean = strip_tags($domain);
+        $clean = trim($clean);
+        $normalized = preg_replace('/[\s\p{Cc}\x{200B}\x{FEFF}]+/u', '', $clean);
+        $hadNoise = $normalized !== $clean;
+        return strtolower($normalized ?? '');
+    }
+
+    private function domainFormatErrorMessage(bool $hadNoise): string
+    {
+        $message = '❌ 域名格式错误，请检查后重试。';
+        if ($hadNoise) {
+            $message .= "\n⚠️ 检测到输入包含空格或不可见字符，请删除后重新发送。";
+        }
+        return $message;
     }
 
     private function updateOrderStatus(int $userId, CertOrder $order, string $status, array $extra = []): void
