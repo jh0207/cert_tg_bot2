@@ -462,6 +462,13 @@ class CertService
                 'order' => $latest,
             ];
         }
+        if ($latest && $latest['status'] === 'issued') {
+            return [
+                'success' => true,
+                'message' => $this->buildOrderStatusMessage($latest, true),
+                'order' => $latest,
+            ];
+        }
 
         return [
             'success' => true,
