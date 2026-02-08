@@ -57,6 +57,10 @@ class Bot
                 'text' => $text,
             ]);
             $user = $userRecord->toArray();
+            if ((int) ($user['is_banned'] ?? 0) === 1) {
+                $this->telegram->sendMessage($chatId, '🚫 你的账号已被封禁，请联系管理员。');
+                return;
+            }
             if ($text === '🆕 申请证书') {
                 $text = '/new';
             } elseif ($text === '📂 我的订单') {
@@ -110,6 +114,8 @@ class Bot
                         '/status example.com 查看订单状态',
                         '/diag 查看诊断信息（Owner 专用）',
                         '/quota add <tg_id> <次数> 追加申请次数',
+                        '/ban <tg_id> 封禁用户',
+                        '/unban <tg_id> 解封用户',
                         '',
                         '📌 <b>常用按钮</b>',
                         '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
@@ -275,6 +281,52 @@ class Bot
                 return;
             }
 
+            if (strpos($text, '/ban') === 0) {
+                if (!$this->auth->isAdmin($message['from']['id'])) {
+                    $this->telegram->sendMessage($chatId, '❌ 仅管理员可封禁用户。');
+                    return;
+                }
+                $parts = preg_split('/\s+/', trim($text));
+                $targetId = isset($parts[1]) ? (int) $parts[1] : 0;
+                if ($targetId <= 0) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/ban <tg_id>');
+                    return;
+                }
+                $target = TgUser::where('tg_id', $targetId)->find();
+                if (!$target) {
+                    $this->telegram->sendMessage($chatId, '❌ 用户不存在。');
+                    return;
+                }
+                if ($target['role'] === 'owner') {
+                    $this->telegram->sendMessage($chatId, '❌ 无法封禁 Owner。');
+                    return;
+                }
+                $target->save(['is_banned' => 1]);
+                $this->telegram->sendMessage($chatId, "✅ 已封禁用户 <b>{$targetId}</b>。");
+                return;
+            }
+
+            if (strpos($text, '/unban') === 0) {
+                if (!$this->auth->isAdmin($message['from']['id'])) {
+                    $this->telegram->sendMessage($chatId, '❌ 仅管理员可解封用户。');
+                    return;
+                }
+                $parts = preg_split('/\s+/', trim($text));
+                $targetId = isset($parts[1]) ? (int) $parts[1] : 0;
+                if ($targetId <= 0) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/unban <tg_id>');
+                    return;
+                }
+                $target = TgUser::where('tg_id', $targetId)->find();
+                if (!$target) {
+                    $this->telegram->sendMessage($chatId, '❌ 用户不存在。');
+                    return;
+                }
+                $target->save(['is_banned' => 0]);
+                $this->telegram->sendMessage($chatId, "✅ 已解封用户 <b>{$targetId}</b>。");
+                return;
+            }
+
             $this->sendMainMenu($chatId, '🤔 未知指令，点击下方菜单或发送 /help 查看指令。');
         } catch (\Throwable $e) {
             $this->logDebug('message_exception', [
@@ -350,8 +402,10 @@ class Bot
                 }
                 $this->sendVerifyProcessingMessageById($chatId, $userId, $orderId);
                 $result = $this->certService->verifyOrderById($userId, $orderId);
-                if (($result['success'] ?? false) && isset($result['order'])) {
-                    $keyboard = $this->resolveOrderKeyboard($result);
+                if (isset($result['order'])) {
+                    $keyboard = ($result['refresh_only'] ?? false)
+                        ? $this->buildVerifyRefreshKeyboard($result['order'])
+                        : $this->resolveOrderKeyboard($result);
                     $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
                 } else {
                     $this->telegram->sendMessage($chatId, $result['message']);
@@ -529,6 +583,8 @@ class Bot
                             '/status example.com 查看订单状态',
                             '/diag 查看诊断信息（Owner 专用）',
                             '/quota add <tg_id> <次数> 追加申请次数',
+                            '/ban <tg_id> 封禁用户',
+                            '/unban <tg_id> 解封用户',
                             '',
                             '📌 <b>常用按钮</b>',
                             '🆕 申请证书 / 📂 我的订单 / 📖 使用帮助',
@@ -725,6 +781,19 @@ class Bot
         ];
     }
 
+    private function buildVerifyRefreshKeyboard(array $order): array
+    {
+        $orderId = (int) ($order['id'] ?? 0);
+        return [
+            [
+                ['text' => '🔄 刷新状态', 'callback_data' => "status:{$orderId}"],
+            ],
+            [
+                ['text' => '返回订单列表', 'callback_data' => 'menu:orders'],
+            ],
+        ];
+    }
+
     private function buildFailedKeyboard(int $orderId): array
     {
         return [
@@ -910,6 +979,7 @@ class Bot
             }
 
             $domain = $domainInput ?? $text;
+            $this->sendProcessingMessage($chatId, '⏳ 正在提交域名，请稍候…');
             $result = $this->certService->submitDomain($user['id'], $domain);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);
@@ -956,6 +1026,7 @@ class Bot
                 'order_id' => $order['id'],
                 'domain' => $domain,
             ]);
+            $this->sendProcessingMessage($chatId, '⏳ 正在提交域名，请稍候…');
             $result = $this->certService->submitDomain($user['id'], $domain);
             $keyboard = $this->resolveOrderKeyboard($result);
             $this->telegram->sendMessage($chatId, $result['message'], $keyboard);

@@ -529,6 +529,7 @@ class CertService
                 return [
                     'success' => false,
                     'message' => '⚠️ 缺少 TXT 记录信息，请点击「🔁 重新生成DNS记录」后再验证。',
+                    'order' => $order->toArray(),
                 ];
             }
 
@@ -546,6 +547,8 @@ class CertService
                 return [
                     'success' => false,
                     'message' => '⏳ 当前未检测到全部 TXT 记录，DNS 可能仍在生效中。通常需要 1~10 分钟，部分 DNS 更久。',
+                    'order' => $order->toArray(),
+                    'refresh_only' => true,
                 ];
             }
             $this->logDebug('dns_verify_success', ['order_id' => $order['id']]);
