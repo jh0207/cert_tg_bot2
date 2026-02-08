@@ -195,7 +195,7 @@ class Bot
 
             if (strpos($text, '/domain') === 0) {
                 if ($domainInput === null) {
-                    $this->telegram->sendMessage($chatId, '⚠️ 请输入要申请的域名，例如 <b>example.com</b> 或 <b>www.example.com</b>。');
+                    $this->sendMainMenu($chatId, '⚠️ 请输入要申请的域名，例如 <b>example.com</b> 或 <b>www.example.com</b>。');
                     return;
                 }
 
@@ -209,7 +209,7 @@ class Bot
             if (strpos($text, '/verify') === 0) {
                 $domain = trim(str_replace('/verify', '', $text));
                 if ($domain === '') {
-                    $this->telegram->sendMessage($chatId, '⚠️ 请输入要验证的域名，例如 <b>example.com</b>。');
+                    $this->sendMainMenu($chatId, '⚠️ 请输入要验证的域名，例如 <b>example.com</b>。');
                     return;
                 }
                 $this->sendVerifyProcessingMessageByDomain($chatId, $user['id'], $domain);
@@ -227,7 +227,7 @@ class Bot
                 $domain = trim(str_replace('/status', '', $text));
                 if ($domain === '') {
                     $this->setPendingAction($message['from']['id'], 'await_status_domain');
-                    $this->telegram->sendMessage($chatId, '⚠️ 请输入要查询的域名，例如 <b>example.com</b>。');
+                    $this->sendMainMenu($chatId, '⚠️ 请输入要查询的域名，例如 <b>example.com</b>。');
                     return;
                 }
                 $result = $this->certService->status($message['from'], $domain);
@@ -388,9 +388,9 @@ class Bot
                         $prompt .= "不要输入 http:// 或 https://\n";
                         $prompt .= "不要输入 *.example.com";
                     }
-                    $this->telegram->sendMessage($chatId, $prompt);
+                    $this->sendMainMenu($chatId, $prompt);
                 } else {
-                    $this->telegram->sendMessage($chatId, $result['message']);
+                    $this->sendMainMenu($chatId, $result['message']);
                 }
                 return;
             }
@@ -519,12 +519,13 @@ class Bot
                     $messageText .= "✅ <b>通配符证书</b>：保护 *.example.com，并同时包含 example.com。\n";
                     $messageText .= "📌 通配符证书只需输入主域名（example.com），不要输入 *.example.com。";
                     $this->telegram->sendMessage($chatId, $messageText, $keyboard);
+                    $this->telegram->sendMessageWithReplyKeyboard($chatId, '📌 也可使用下方菜单继续操作。', $this->buildReplyMenuKeyboard());
                     return;
                 }
 
                 if ($subAction === 'domain') {
                     $result = $this->certService->requestDomainInput($userId, $orderId);
-                    $this->telegram->sendMessage($chatId, $result['message']);
+                    $this->sendMainMenu($chatId, $result['message']);
                     return;
                 }
 
@@ -574,7 +575,7 @@ class Bot
 
                 if ($menuAction === 'status') {
                     $this->setPendingAction($from['id'], 'await_status_domain');
-                    $this->telegram->sendMessage($chatId, '🔎 请输入要查询的域名，例如 <b>example.com</b>。');
+                    $this->sendMainMenu($chatId, '🔎 请输入要查询的域名，例如 <b>example.com</b>。');
                     return;
                 }
 
@@ -986,7 +987,7 @@ class Bot
         if ($user['pending_action'] === 'await_status_domain') {
             $domainInput = $this->extractCommandArgument($text, '/status');
             if ($domainInput === null && strpos($text, '/') === 0) {
-                $this->telegram->sendMessage($chatId, '⚠️ 请输入要查询的域名，例如 <b>example.com</b>。');
+                $this->sendMainMenu($chatId, '⚠️ 请输入要查询的域名，例如 <b>example.com</b>。');
                 return true;
             }
 
