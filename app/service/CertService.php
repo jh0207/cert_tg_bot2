@@ -426,6 +426,7 @@ class CertService
             return ['success' => false, 'message' => '❌ 用户不存在。'];
         }
 
+        $this->acme->removeOrder($order['domain']);
         return $this->issueOrder($user, $order);
     }
 
@@ -455,14 +456,13 @@ class CertService
 
         $this->processDnsGenerationOrder($order);
         $latest = CertOrder::where('id', $order['id'])->find();
-        if ($latest && in_array($latest['status'], ['dns_wait', 'issued', 'failed'], true)) {
-            return [
-                'success' => true,
-                'message' => $this->buildOrderStatusMessage($latest, true),
-                'order' => $latest,
-            ];
+        if (!$latest) {
+            $latest = CertOrder::where('tg_user_id', $user['id'])
+                ->where('domain', $domain)
+                ->order('id', 'desc')
+                ->find();
         }
-        if ($latest && $latest['status'] === 'issued') {
+        if ($latest && in_array($latest['status'], ['dns_wait', 'issued', 'failed', 'created'], true)) {
             return [
                 'success' => true,
                 'message' => $this->buildOrderStatusMessage($latest, true),
@@ -544,6 +544,12 @@ class CertService
             ]);
             $this->processIssueOrder($order);
             $latest = CertOrder::where('id', $order['id'])->find();
+            if (!$latest) {
+                $latest = CertOrder::where('tg_user_id', $userId)
+                    ->where('domain', $order['domain'])
+                    ->order('id', 'desc')
+                    ->find();
+            }
             if ($latest) {
                 $latestOrder = $latest->toArray();
                 return [
@@ -662,11 +668,13 @@ class CertService
         $dnsProcessed = $this->processDnsGeneration($limit);
         $issueProcessed = $this->processIssueOrders($limit);
         $installProcessed = $this->processInstallOrders($limit);
+        $failedProcessed = $this->processFailedOrders($limit);
 
         return [
             'dns' => $dnsProcessed,
             'issue' => $issueProcessed,
             'install' => $installProcessed,
+            'failed' => $failedProcessed,
         ];
     }
 
@@ -715,7 +723,7 @@ class CertService
         $output = $result['output'] ?? '';
         $combinedOutput = trim($output . "\n" . $stderr);
         if ($this->isExistingCertOutput($combinedOutput)) {
-            $this->resetOrderForExistingCert($order, $combinedOutput);
+            $this->handleExistingCert($order, $combinedOutput);
             return false;
         }
         if ($this->isCertSuccessOutput($combinedOutput)) {
@@ -793,7 +801,7 @@ class CertService
         $renewOutput = $renew['output'] ?? '';
         $renewCombined = trim($renewOutput . "\n" . $renewStderr);
         if ($this->isExistingCertOutput($renewCombined)) {
-            $this->resetOrderForExistingCert($order, $renewCombined);
+            $this->handleExistingCert($order, $renewCombined);
             return false;
         }
         $renewSuccess = (bool) ($renew['success'] ?? false);
@@ -876,6 +884,30 @@ class CertService
         return ['processed' => $processed];
     }
 
+    private function processFailedOrders(int $limit): array
+    {
+        $ttlMinutes = $this->getFailedOrderTtlMinutes();
+        if ($ttlMinutes <= 0) {
+            return ['processed' => 0];
+        }
+
+        $threshold = date('Y-m-d H:i:s', time() - $ttlMinutes * 60);
+        $orders = CertOrder::where('status', 'failed')
+            ->where('updated_at', '<', $threshold)
+            ->order('id', 'asc')
+            ->limit($limit)
+            ->select();
+
+        $processed = 0;
+        foreach ($orders as $order) {
+            if ($this->cleanupFailedOrder($order)) {
+                $processed++;
+            }
+        }
+
+        return ['processed' => $processed];
+    }
+
     private function resolveAcmeError(string $stderr, string $output): string
     {
         $error = trim($stderr);
@@ -911,6 +943,13 @@ class CertService
         $config = config('tg');
         $limit = (int) ($config['acme_retry_limit'] ?? 3);
         return $limit > 0 ? $limit : 3;
+    }
+
+    private function getFailedOrderTtlMinutes(): int
+    {
+        $config = config('tg');
+        $ttl = (int) ($config['failed_order_ttl_minutes'] ?? 0);
+        return $ttl > 0 ? $ttl : 0;
     }
 
     private function formatCertType(string $type): string
@@ -1161,6 +1200,8 @@ class CertService
         if ($valueCount > 1) {
             $message .= "⚠️ 当前需要添加 <b>{$valueCount}</b> 条 TXT 记录，请全部添加后再验证。\n";
             $message .= "✅ DNS 允许同一个主机记录（_acme-challenge）存在多条 TXT 记录值，请放心添加。\n";
+        } elseif ($valueCount === 1) {
+            $message .= "✅ 当前仅需添加 1 条 TXT 记录，根域名与通配符会共用同一条记录。\n";
         }
         $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
@@ -1304,20 +1345,63 @@ class CertService
         return strpos($output, 'seems to already have an ecc cert') !== false;
     }
 
-    private function resetOrderForExistingCert(CertOrder $order, string $acmeOutput): void
+    private function handleExistingCert(CertOrder $order, string $acmeOutput): void
     {
-        $this->updateOrderStatus($order['tg_user_id'], $order, 'created', [
-            'need_dns_generate' => 1,
-            'need_issue' => 0,
-            'need_install' => 0,
-            'retry_count' => 0,
-            'last_error' => '检测到已有证书，已重新下单申请，请稍后刷新状态。',
-            'txt_host' => '',
-            'txt_value' => '',
-            'txt_values_json' => '',
-            'acme_output' => $acmeOutput,
+        $recent = ActionLog::where('tg_user_id', $order['tg_user_id'])
+            ->where('action', 'order_existing_cert')
+            ->where('detail', $order['domain'])
+            ->order('id', 'desc')
+            ->find();
+        if ($recent && !empty($recent['created_at'])) {
+            $timestamp = strtotime($recent['created_at']);
+            if ($timestamp && (time() - $timestamp) < 600) {
+                $this->updateOrderStatus($order['tg_user_id'], $order, 'failed', [
+                    'need_dns_generate' => 0,
+                    'need_issue' => 0,
+                    'need_install' => 0,
+                    'retry_count' => 0,
+                    'last_error' => '检测到已有证书，请稍后再试或取消订单重新申请。',
+                    'txt_host' => '',
+                    'txt_value' => '',
+                    'txt_values_json' => '',
+                    'acme_output' => $acmeOutput,
+                ]);
+                $this->log($order['tg_user_id'], 'order_existing_cert_blocked', $order['domain']);
+                return;
+            }
+        }
+
+        $this->log($order['tg_user_id'], 'order_existing_cert', $order['domain']);
+        $this->acme->removeOrder($order['domain']);
+        $domain = $order['domain'];
+        $certType = $order['cert_type'];
+        $order->delete();
+
+        $user = TgUser::where('id', $order['tg_user_id'])->find();
+        if (!$user) {
+            return;
+        }
+
+        $newOrder = CertOrder::create([
+            'tg_user_id' => $order['tg_user_id'],
+            'domain' => $domain,
+            'cert_type' => $certType,
+            'status' => 'created',
         ]);
-        $this->log($order['tg_user_id'], 'order_reset', $order['domain']);
+        $this->log($order['tg_user_id'], 'order_recreate', $domain);
+        $this->issueOrder($user, $newOrder);
+    }
+
+    private function cleanupFailedOrder(CertOrder $order): bool
+    {
+        $user = TgUser::where('id', $order['tg_user_id'])->find();
+        $shouldRefund = $order['domain'] !== '' && !$this->isUnlimitedUser($user);
+        if ($shouldRefund && $user) {
+            $user->save(['apply_quota' => (int) $user['apply_quota'] + 1]);
+        }
+        $order->delete();
+        $this->log($order['tg_user_id'], 'order_auto_cancel', (string) $order['id']);
+        return true;
     }
 
     private function installOrExportCert(CertOrder $order): ?string
