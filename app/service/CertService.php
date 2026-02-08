@@ -543,6 +543,12 @@ class CertService
             ]);
             $this->processIssueOrder($order);
             $latest = CertOrder::where('id', $order['id'])->find();
+            if (!$latest) {
+                $latest = CertOrder::where('tg_user_id', $userId)
+                    ->where('domain', $order['domain'])
+                    ->order('id', 'desc')
+                    ->find();
+            }
             if ($latest) {
                 $latestOrder = $latest->toArray();
                 return [
@@ -1160,6 +1166,8 @@ class CertService
         if ($valueCount > 1) {
             $message .= "⚠️ 当前需要添加 <b>{$valueCount}</b> 条 TXT 记录，请全部添加后再验证。\n";
             $message .= "✅ DNS 允许同一个主机记录（_acme-challenge）存在多条 TXT 记录值，请放心添加。\n";
+        } elseif ($valueCount === 1) {
+            $message .= "✅ 当前仅需添加 1 条 TXT 记录，根域名与通配符会共用同一条记录。\n";
         }
         $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接主域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
