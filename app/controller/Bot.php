@@ -689,6 +689,20 @@ class Bot
 
     private function buildIssuedKeyboard(int $orderId, ?int $userId = null): array
     {
+        $downloadButton = null;
+        if ($userId) {
+            $zipUrl = $this->certService->getOrderZipUrl($userId, $orderId);
+            if ($zipUrl) {
+                $downloadButton = ['text' => '⬇️ 下载压缩包', 'url' => $zipUrl];
+            }
+        }
+
+        $firstRow = [];
+        if ($downloadButton) {
+            $firstRow[] = $downloadButton;
+        }
+        $firstRow[] = ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"];
+
         return [
             [
                 ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"],
