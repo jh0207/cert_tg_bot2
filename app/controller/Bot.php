@@ -70,14 +70,10 @@ class Bot
             } elseif (in_array($text, ['📖 使用帮助', '使用帮助', '帮助'], true)) {
                 $text = '/help';
             }
-            if ($this->handlePendingInput($user, $message, $chatId, $text)) {
+            if (strpos($text, '/help') === 0) {
+                $this->sendHelpMessage($chatId, $message['from']['id'], $user);
                 return;
             }
-
-            if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
-                return;
-            }
-            $domainInput = $this->extractCommandArgument($text, '/domain');
 
             if ($text === '🆕 申请证书') {
                 $text = '/new';
@@ -103,10 +99,14 @@ class Bot
                 return;
             }
 
-            if (strpos($text, '/help') === 0) {
-                $this->sendHelpMessage($chatId, $message['from']['id'], $user);
+            if ($this->handlePendingInput($user, $message, $chatId, $text)) {
                 return;
             }
+
+            if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
+                return;
+            }
+            $domainInput = $this->extractCommandArgument($text, '/domain');
 
             if (strpos($text, '/new') === 0) {
                 $result = $this->certService->startOrder($message['from']);
