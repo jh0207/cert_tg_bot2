@@ -772,7 +772,7 @@ class Bot
 
     private function isPrivateChat(array $message): bool
     {
-        return ($message['chat']['type'] ?? '') === 'private';
+        return ($message['chat']['type'] ?? 'private') === 'private';
     }
 
     private function isMentioned(array $message, string $text): bool
@@ -783,10 +783,19 @@ class Bot
 
         $entities = $message['entities'] ?? [];
         foreach ($entities as $entity) {
-            if (($entity['type'] ?? '') !== 'mention') {
+            $type = $entity['type'] ?? '';
+            if ($type === 'mention') {
+                return true;
+            }
+            if ($type === 'bot_command') {
+                $command = substr($text, (int) $entity['offset'], (int) $entity['length']);
+                if (strpos($command, '@') !== false) {
+                    return true;
+                }
+            }
+            if ($type !== 'mention') {
                 continue;
             }
-            return true;
         }
 
         return false;
