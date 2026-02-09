@@ -7,6 +7,7 @@ $ownerLock = env_value('OWNER_LOCK');
 return [
     'token' => env_value('TG_BOT_TOKEN', ''),
     'api_base' => env_value('TG_API_BASE', 'https://api.telegram.org'),
+    'bot_username' => env_value('TG_BOT_USERNAME', ''),
     'owner_lock' => $ownerLock === null ? true : filter_var($ownerLock, FILTER_VALIDATE_BOOLEAN),
     'acme_path' => env_value('ACME_PATH', '/root/.acme.sh/acme.sh'),
     'acme_server' => env_value('ACME_SERVER', 'letsencrypt'),
