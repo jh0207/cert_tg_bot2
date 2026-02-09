@@ -46,6 +46,19 @@ class Bot
             if (!$chatId || $text === '') {
                 return;
             }
+            $isPrivateChat = $this->isPrivateChat($message);
+            $botUsername = trim((string) (config('tg')['bot_username'] ?? ''));
+            if (!$isPrivateChat) {
+                $isAdmin = $this->auth->isAdmin($message['from']['id']);
+                $isAdminCommand = $this->isGroupAdminCommand($text, $botUsername);
+                $isMentioned = $this->isMentioned($message, $text, $botUsername);
+                if (!$isAdminCommand && !$isMentioned) {
+                    return;
+                }
+                if ($isMentioned) {
+                    $text = $this->stripBotMentionFromCommand($text, $botUsername);
+                }
+            }
 
             if ($chatType !== 'private') {
                 $username = $message['from']['username'] ?? '';
@@ -693,6 +706,20 @@ class Bot
 
     private function buildIssuedKeyboard(int $orderId, ?int $userId = null): array
     {
+        $downloadButton = null;
+        if ($userId) {
+            $zipUrl = $this->certService->getOrderZipUrl($userId, $orderId);
+            if ($zipUrl) {
+                $downloadButton = ['text' => '⬇️ 下载压缩包', 'url' => $zipUrl];
+            }
+        }
+
+        $firstRow = [];
+        if ($downloadButton) {
+            $firstRow[] = $downloadButton;
+        }
+        $firstRow[] = ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"];
+
         return [
             [
                 ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"],
