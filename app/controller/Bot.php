@@ -75,6 +75,16 @@ class Bot
                 return;
             }
 
+            if ($text === '🆕 申请证书') {
+                $text = '/new';
+            } elseif ($text === '📂 我的订单') {
+                $text = '/orders';
+            } elseif ($text === '🔎 查询状态') {
+                $text = '/status';
+            } elseif ($text === '📖 使用帮助') {
+                $text = '/help';
+            }
+
             if (strpos($text, '/start') === 0) {
                 $role = $user['role'];
                 $messageText = "👋 <b>欢迎使用证书机器人</b>\n";
@@ -652,6 +662,20 @@ class Bot
 
     private function buildIssuedKeyboard(int $orderId, ?int $userId = null): array
     {
+        $downloadButton = null;
+        if ($userId) {
+            $zipUrl = $this->certService->getOrderZipUrl($userId, $orderId);
+            if ($zipUrl) {
+                $downloadButton = ['text' => '⬇️ 下载压缩包', 'url' => $zipUrl];
+            }
+        }
+
+        $firstRow = [];
+        if ($downloadButton) {
+            $firstRow[] = $downloadButton;
+        }
+        $firstRow[] = ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"];
+
         return [
             [
                 ['text' => '📖 部署教程', 'callback_data' => "guide:{$orderId}"],
