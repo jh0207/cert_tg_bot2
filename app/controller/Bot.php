@@ -48,10 +48,15 @@ class Bot
             $isPrivateChat = $this->isPrivateChat($message);
             $botUsername = trim((string) (config('tg')['bot_username'] ?? ''));
             if (!$isPrivateChat) {
-                if (!$this->isMentioned($message, $text, $botUsername)) {
+                $isAdmin = $this->auth->isAdmin($message['from']['id']);
+                $isAdminCommand = $this->isGroupAdminCommand($text, $botUsername);
+                $isMentioned = $this->isMentioned($message, $text, $botUsername);
+                if (!$isAdminCommand && !$isMentioned) {
                     return;
                 }
-                $text = $this->stripBotMentionFromCommand($text, $botUsername);
+                if ($isMentioned) {
+                    $text = $this->stripBotMentionFromCommand($text, $botUsername);
+                }
             }
 
             $this->auth->startUser($message['from']);
@@ -74,7 +79,7 @@ class Bot
                     $this->telegram->sendMessage($chatId, $this->buildGroupUserNotice($user));
                     return;
                 }
-                if (!$this->isGroupAdminCommand($text)) {
+                if (!$this->isGroupAdminCommand($text, $botUsername)) {
                     $this->telegram->sendMessage($chatId, $this->buildGroupAdminHelp());
                     return;
                 }
@@ -824,13 +829,19 @@ class Bot
         return trim(preg_replace($pattern, '/$1', $text));
     }
 
-    private function isGroupAdminCommand(string $text): bool
+    private function isGroupAdminCommand(string $text, string $botUsername): bool
     {
         if ($text === '' || strpos($text, '/') !== 0) {
             return false;
         }
 
         $command = strtolower(strtok($text, ' '));
+        if ($botUsername !== '') {
+            $suffix = '@' . strtolower($botUsername);
+            if (str_ends_with($command, $suffix)) {
+                $command = substr($command, 0, -strlen($suffix));
+            }
+        }
         return in_array($command, ['/quota', '/ban', '/unban', '/promote', '/demote'], true);
     }
 
