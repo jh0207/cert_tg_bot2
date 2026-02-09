@@ -263,6 +263,27 @@ class Bot
                 return;
             }
 
+            if (strpos($text, '/demote') === 0) {
+                if (!$this->auth->isOwner($message['from']['id'])) {
+                    $this->telegram->sendMessage($chatId, '❌ 仅 Owner 可取消管理员。');
+                    return;
+                }
+
+                $parts = preg_split('/\s+/', trim($text));
+                $targetUser = isset($parts[1]) ? $this->resolveTargetUser($parts[1]) : null;
+                if (!$targetUser) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/demote @用户名');
+                    return;
+                }
+                $result = $this->auth->demote($message['from']['id'], (int) $targetUser['tg_id']);
+                if (!($result['success'] ?? false)) {
+                    $this->telegram->sendMessage($chatId, '❌ ' . ($result['message'] ?? '取消失败'));
+                    return;
+                }
+                $this->telegram->sendMessage($chatId, "✅ 已取消用户 <b>{$this->formatTargetLabel($targetUser)}</b> 的管理员权限。");
+                return;
+            }
+
             if (strpos($text, '/unban') === 0) {
                 if (!$this->auth->isAdmin($message['from']['id'])) {
                     $this->telegram->sendMessage($chatId, '❌ 仅管理员可解封用户。');
@@ -906,6 +927,7 @@ class Bot
                 '/ban @用户名 封禁用户',
                 '/unban @用户名 解封用户',
                 '/promote @用户名 设置管理员（Owner 专用）',
+                '/demote @用户名 取消管理员（Owner 专用）',
                 '',
                 '📌 <b>常用按钮</b>',
                 '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
