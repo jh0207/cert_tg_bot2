@@ -217,6 +217,7 @@ class CertService
             ->where('status', '<>', 'issued')
             ->find();
         if ($duplicate) {
+            $user->save(['pending_action' => '', 'pending_order_id' => 0]);
             return [
                 'success' => false,
                 'message' => $this->buildOrderStatusMessage($duplicate, true),
