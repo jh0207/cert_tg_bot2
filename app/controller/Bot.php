@@ -98,6 +98,11 @@ class Bot
             }
             $domainInput = $this->extractCommandArgument($text, '/domain');
 
+            if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
+                return;
+            }
+            $domainInput = $this->extractCommandArgument($text, '/domain');
+
             if (strpos($text, '/new') === 0) {
                 $result = $this->certService->startOrder($message['from']);
                 if (!$result['success']) {
@@ -194,29 +199,30 @@ class Bot
 
                 $parts = preg_split('/\s+/', trim($text));
                 if (count($parts) < 4 || $parts[1] !== 'add') {
-                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/quota add <tg_id> <次数>');
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/quota add @用户名 <次数>（示例：/quota add @someone 3）');
                     return;
                 }
 
-                $targetId = (int) $parts[2];
+                $targetUser = $this->resolveTargetUser($parts[2]);
+                if (!$targetUser) {
+                    $this->telegram->sendMessage($chatId, '❌ 用户不存在或用户名未记录。');
+                    return;
+                }
+
+                $targetId = (int) $targetUser['tg_id'];
                 $amount = (int) $parts[3];
-                if ($targetId <= 0 || $amount <= 0) {
-                    $this->telegram->sendMessage($chatId, '⚠️ tg_id 和次数必须是正整数。');
+                if ($amount <= 0) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 次数必须是正整数。');
                     return;
                 }
 
-                $target = TgUser::where('tg_id', $targetId)->find();
-                if (!$target) {
-                    $this->telegram->sendMessage($chatId, '❌ 用户不存在。');
-                    return;
-                }
-
-                $current = (int) $target['apply_quota'];
+                $current = (int) $targetUser['apply_quota'];
                 $newQuota = $current + $amount;
-                $target->save(['apply_quota' => $newQuota]);
+                $targetUser->save(['apply_quota' => $newQuota]);
+                $displayName = $this->formatTargetLabel($targetUser);
                 $this->telegram->sendMessage(
                     $chatId,
-                    "✅ 已为用户 <b>{$targetId}</b> 增加 <b>{$amount}</b> 次申请额度（当前剩余 {$newQuota} 次）。"
+                    "✅ 已为用户 <b>{$displayName}</b> 增加 <b>{$amount}</b> 次申请额度（当前剩余 {$newQuota} 次）。"
                 );
                 return;
             }
@@ -227,22 +233,17 @@ class Bot
                     return;
                 }
                 $parts = preg_split('/\s+/', trim($text));
-                $targetId = isset($parts[1]) ? (int) $parts[1] : 0;
-                if ($targetId <= 0) {
-                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/ban <tg_id>');
+                $targetUser = isset($parts[1]) ? $this->resolveTargetUser($parts[1]) : null;
+                if (!$targetUser) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/ban @用户名');
                     return;
                 }
-                $target = TgUser::where('tg_id', $targetId)->find();
-                if (!$target) {
-                    $this->telegram->sendMessage($chatId, '❌ 用户不存在。');
-                    return;
-                }
-                if ($target['role'] === 'owner') {
+                if ($targetUser['role'] === 'owner') {
                     $this->telegram->sendMessage($chatId, '❌ 无法封禁 Owner。');
                     return;
                 }
-                $target->save(['is_banned' => 1]);
-                $this->telegram->sendMessage($chatId, "✅ 已封禁用户 <b>{$targetId}</b>。");
+                $targetUser->save(['is_banned' => 1]);
+                $this->telegram->sendMessage($chatId, "✅ 已封禁用户 <b>{$this->formatTargetLabel($targetUser)}</b>。");
                 return;
             }
 
@@ -252,18 +253,13 @@ class Bot
                     return;
                 }
                 $parts = preg_split('/\s+/', trim($text));
-                $targetId = isset($parts[1]) ? (int) $parts[1] : 0;
-                if ($targetId <= 0) {
-                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/unban <tg_id>');
+                $targetUser = isset($parts[1]) ? $this->resolveTargetUser($parts[1]) : null;
+                if (!$targetUser) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/unban @用户名');
                     return;
                 }
-                $target = TgUser::where('tg_id', $targetId)->find();
-                if (!$target) {
-                    $this->telegram->sendMessage($chatId, '❌ 用户不存在。');
-                    return;
-                }
-                $target->save(['is_banned' => 0]);
-                $this->telegram->sendMessage($chatId, "✅ 已解封用户 <b>{$targetId}</b>。");
+                $targetUser->save(['is_banned' => 0]);
+                $this->telegram->sendMessage($chatId, "✅ 已解封用户 <b>{$this->formatTargetLabel($targetUser)}</b>。");
                 return;
             }
 
@@ -904,9 +900,9 @@ class Bot
                 '/verify example.com DNS 解析完成后验证并签发',
                 '/status example.com 查看订单状态',
                 '/diag 查看诊断信息（Owner 专用）',
-                '/quota add &lt;tg_id&gt; &lt;次数&gt; 追加申请次数',
-                '/ban &lt;tg_id&gt; 封禁用户',
-                '/unban &lt;tg_id&gt; 解封用户',
+                        '/quota add @用户名 追加申请次数（示例：/quota add @someone 3）',
+                        '/ban @用户名 封禁用户',
+                        '/unban @用户名 解封用户',
                 '',
                 '📌 <b>常用按钮</b>',
                 '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
@@ -947,6 +943,37 @@ class Bot
             '提示：任何时候都可以通过订单列表继续或取消订单。',
         ]);
         $this->sendMainMenu($chatId, $help);
+    }
+
+    private function resolveTargetUser(string $raw): ?TgUser
+    {
+        $value = trim($raw);
+        if ($value === '') {
+            return null;
+        }
+
+        if ($value[0] === '@') {
+            $username = ltrim($value, '@');
+            if ($username === '') {
+                return null;
+            }
+            return TgUser::where('username', $username)->find();
+        }
+
+        if (ctype_digit($value)) {
+            return TgUser::where('tg_id', (int) $value)->find();
+        }
+
+        return TgUser::where('username', $value)->find();
+    }
+
+    private function formatTargetLabel(TgUser $user): string
+    {
+        $username = trim((string) ($user['username'] ?? ''));
+        if ($username !== '') {
+            return '@' . $username;
+        }
+        return (string) ($user['tg_id'] ?? '未知用户');
     }
 
     private function handleFallbackDomainInput(array $user, array $message, int $chatId, string $text): bool
