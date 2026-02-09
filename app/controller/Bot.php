@@ -41,6 +41,7 @@ class Bot
             }
 
             $chatId = $message['chat']['id'] ?? null;
+            $chatType = $message['chat']['type'] ?? '';
             $text = trim($message['text'] ?? '');
             if (!$chatId || $text === '') {
                 return;
@@ -100,7 +101,6 @@ class Bot
             if ($this->handlePendingInput($user, $message, $chatId, $text)) {
                 return;
             }
-            $domainInput = $this->extractCommandArgument($text, '/domain');
 
             if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
                 return;
