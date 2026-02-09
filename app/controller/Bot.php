@@ -41,6 +41,7 @@ class Bot
             }
 
             $chatId = $message['chat']['id'] ?? null;
+            $chatType = $message['chat']['type'] ?? '';
             $text = trim($message['text'] ?? '');
             if (!$chatId || $text === '') {
                 return;
@@ -59,6 +60,13 @@ class Bot
                 }
             }
 
+            if ($chatType !== 'private') {
+                $username = $message['from']['username'] ?? '';
+                $prefix = $username !== '' ? '@' . $username . '，' : '';
+                $this->telegram->sendMessage($chatId, "{$prefix}请私聊使用。");
+                return;
+            }
+
             $this->auth->startUser($message['from']);
             $userRecord = TgUser::where('tg_id', $message['from']['id'])->find();
             if (!$userRecord) {
@@ -73,16 +81,6 @@ class Bot
             if ((int) ($user['is_banned'] ?? 0) === 1) {
                 $this->telegram->sendMessage($chatId, '🚫 你的账号已被封禁，请联系管理员。');
                 return;
-            }
-            if (!$isPrivateChat) {
-                if (!$this->auth->isAdmin($message['from']['id'])) {
-                    $this->telegram->sendMessage($chatId, $this->buildGroupUserNotice($user));
-                    return;
-                }
-                if (!$this->isGroupAdminCommand($text, $botUsername)) {
-                    $this->telegram->sendMessage($chatId, $this->buildGroupAdminHelp());
-                    return;
-                }
             }
             if ($text === '🆕 申请证书') {
                 $text = '/new';
@@ -112,19 +110,14 @@ class Bot
                 return;
             }
 
-            if ($isPrivateChat) {
-                if ($this->handlePendingInput($user, $message, $chatId, $text)) {
-                    return;
-                }
-                $domainInput = $this->extractCommandArgument($text, '/domain');
-
-                if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
-                    return;
-                }
-                $domainInput = $this->extractCommandArgument($text, '/domain');
-            } else {
-                $domainInput = $this->extractCommandArgument($text, '/domain');
+            if ($this->handlePendingInput($user, $message, $chatId, $text)) {
+                return;
             }
+
+            if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
+                return;
+            }
+            $domainInput = $this->extractCommandArgument($text, '/domain');
 
             if (strpos($text, '/new') === 0) {
                 $result = $this->certService->startOrder($message['from']);
@@ -787,85 +780,6 @@ class Bot
             ['🆕 申请证书', '📂 我的订单'],
             ['🔎 查询状态', '📖 使用帮助'],
         ];
-    }
-
-    private function isPrivateChat(array $message): bool
-    {
-        return ($message['chat']['type'] ?? '') === 'private';
-    }
-
-    private function isMentioned(array $message, string $text, string $botUsername): bool
-    {
-        if ($botUsername === '') {
-            return false;
-        }
-
-        $needle = '@' . strtolower($botUsername);
-        if (strpos(strtolower($text), $needle) !== false) {
-            return true;
-        }
-
-        $entities = $message['entities'] ?? [];
-        foreach ($entities as $entity) {
-            if (($entity['type'] ?? '') !== 'mention') {
-                continue;
-            }
-            $mention = substr($text, (int) $entity['offset'], (int) $entity['length']);
-            if (strtolower($mention) === $needle) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function stripBotMentionFromCommand(string $text, string $botUsername): string
-    {
-        if ($botUsername === '') {
-            return $text;
-        }
-
-        $pattern = '/^\/([^\\s@]+)@' . preg_quote($botUsername, '/') . '\\b/i';
-        return trim(preg_replace($pattern, '/$1', $text));
-    }
-
-    private function isGroupAdminCommand(string $text, string $botUsername): bool
-    {
-        if ($text === '' || strpos($text, '/') !== 0) {
-            return false;
-        }
-
-        $command = strtolower(strtok($text, ' '));
-        if ($botUsername !== '') {
-            $suffix = '@' . strtolower($botUsername);
-            if (str_ends_with($command, $suffix)) {
-                $command = substr($command, 0, -strlen($suffix));
-            }
-        }
-        return in_array($command, ['/quota', '/ban', '/unban', '/promote', '/demote'], true);
-    }
-
-    private function buildGroupUserNotice(array $user): string
-    {
-        $role = $user['role'] ?? 'user';
-        $quota = (int) ($user['apply_quota'] ?? 0);
-        $message = "✅ 已为你注册。\n";
-        $message .= "身份：<b>{$role}</b>\n";
-        $message .= "剩余申请次数：<b>{$quota}</b>\n";
-        $message .= "请私聊我使用完整功能。";
-        return $message;
-    }
-
-    private function buildGroupAdminHelp(): string
-    {
-        return implode("\n\n", [
-            '👮 <b>群聊管理员指令</b>',
-            '/quota add @用户名 追加次数',
-            '/ban @用户名：封禁用户',
-            '/unban @用户名：解封',
-            '/promote @用户名：设置管理员（Owner 专用）',
-            '/demote @用户名：取消管理员（Owner 专用）',
-        ]);
     }
 
     private function sendMainMenu(int $chatId, string $text): void
