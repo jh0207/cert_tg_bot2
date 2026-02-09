@@ -75,16 +75,6 @@ class Bot
                 return;
             }
 
-            if ($text === '🆕 申请证书') {
-                $text = '/new';
-            } elseif ($text === '📂 我的订单') {
-                $text = '/orders';
-            } elseif ($text === '🔎 查询状态') {
-                $text = '/status';
-            } elseif ($text === '📖 使用帮助') {
-                $text = '/help';
-            }
-
             if (strpos($text, '/start') === 0) {
                 $role = $user['role'];
                 $messageText = "👋 <b>欢迎使用证书机器人</b>\n";
@@ -914,9 +904,9 @@ class Bot
                 '/verify example.com DNS 解析完成后验证并签发',
                 '/status example.com 查看订单状态',
                 '/diag 查看诊断信息（Owner 专用）',
-                '/quota add <tg_id> <次数> 追加申请次数',
-                '/ban <tg_id> 封禁用户',
-                '/unban <tg_id> 解封用户',
+                '/quota add &lt;tg_id&gt; &lt;次数&gt; 追加申请次数',
+                '/ban &lt;tg_id&gt; 封禁用户',
+                '/unban &lt;tg_id&gt; 解封用户',
                 '',
                 '📌 <b>常用按钮</b>',
                 '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
