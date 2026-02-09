@@ -1213,12 +1213,13 @@ class CertService
     private function formatTxtRecordBlock(string $domain, string $host, array $values): string
     {
         $recordName = $this->normalizeTxtHost($domain, $host);
+        $displayHost = $this->getTxtHostDisplay($domain, $recordName);
         $valueCount = count($values);
         $message = '';
         foreach ($values as $index => $value) {
             $lineNo = $index + 1;
             $message .= "\n<b>第 {$lineNo} 条记录</b>\n";
-            $message .= "<b>记录名（主机记录）</b>\n<pre>_acme-challenge</pre>\n";
+            $message .= "<b>记录名（主机记录）</b>\n<pre>{$displayHost}</pre>\n";
             $message .= "<b>记录类型</b>\n<pre>TXT</pre>\n";
             $message .= "<b>记录值</b>\n<pre>{$value}</pre>\n";
         }
@@ -1228,8 +1229,25 @@ class CertService
         } elseif ($valueCount === 1) {
             $message .= "✅ 当前仅需添加 <b>1</b> 条 TXT 记录。\n";
         }
-        $message .= "\n说明：主机记录只填 <b>_acme-challenge</b>，系统会自动拼接域名 {$domain}（完整记录为 {$recordName}）。";
+        $message .= "\n说明：主机记录只填 <b>{$displayHost}</b>，系统会自动拼接域名 {$domain}（完整记录为 {$recordName}）。";
         return $message;
+    }
+
+    private function getTxtHostDisplay(string $domain, string $recordName): string
+    {
+        $domain = trim($domain);
+        $recordName = trim($recordName);
+        if ($domain !== '' && $recordName !== '') {
+            $suffix = '.' . $domain;
+            if (substr($recordName, -strlen($suffix)) === $suffix) {
+                $host = rtrim(substr($recordName, 0, -strlen($suffix)), '.');
+                if ($host !== '') {
+                    return $host;
+                }
+            }
+        }
+
+        return $recordName !== '' ? $recordName : '_acme-challenge';
     }
 
     private function buildDownloadFilesMessage($order): string

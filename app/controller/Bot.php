@@ -67,7 +67,7 @@ class Bot
                 $text = '/orders';
             } elseif ($text === '🔎 查询状态') {
                 $text = '/status';
-            } elseif ($text === '📖 使用帮助') {
+            } elseif (in_array($text, ['📖 使用帮助', '使用帮助', '帮助'], true)) {
                 $text = '/help';
             }
             if ($this->handlePendingInput($user, $message, $chatId, $text)) {
@@ -104,57 +104,7 @@ class Bot
             }
 
             if (strpos($text, '/help') === 0) {
-                if ($this->auth->isAdmin($message['from']['id'])) {
-                    $help = implode("\n", [
-                        '🛠️ <b>管理员指令大全</b>',
-                        '',
-                        '/new 申请证书（进入选择类型流程）',
-                        '/domain example.com 快速申请单域名证书',
-                        '/verify example.com DNS 解析完成后验证并签发',
-                        '/status example.com 查看订单状态',
-                        '/diag 查看诊断信息（Owner 专用）',
-                        '/quota add <tg_id> <次数> 追加申请次数',
-                        '/ban <tg_id> 封禁用户',
-                        '/unban <tg_id> 解封用户',
-                        '',
-                        '📌 <b>常用按钮</b>',
-                        '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                        '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
-                        '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                        'DNS 已验证：等待后台签发 / 刷新状态',
-                        '已签发：下载文件、查看证书信息、重新导出',
-                        '',
-                        '📌 <b>状态说明</b>',
-                        '待完善：订单未完成，需选择证书类型并提交域名。',
-                        '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
-                        'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
-                        '已签发：证书已签发，可下载文件。',
-                    ]);
-                    $this->sendMainMenu($chatId, $help);
-                } else {
-                    $quota = (int) ($user['apply_quota'] ?? 0);
-                    $help = implode("\n", [
-                        '📖 <b>使用帮助</b>',
-                        '',
-                        "当前剩余申请次数：<b>{$quota}</b>",
-                        '如需增加次数，请联系管理员。',
-                        '',
-                        '📌 <b>常用按钮</b>',
-                        '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
-                        '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
-                        '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                        'DNS 已验证：🔄 刷新状态',
-                        '已签发：下载文件、查看证书信息、重新导出',
-                        '',
-                        '待完善：请选择证书类型并提交域名。',
-                        '待添加 DNS 解析：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
-                        'DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。',
-                        '已签发：证书已签发，使用下方按钮下载。',
-                        '',
-                        '提示：任何时候都可以通过订单列表继续或取消订单。',
-                    ]);
-                    $this->sendMainMenu($chatId, $help);
-                }
+                $this->sendHelpMessage($chatId, $message['from']['id'], $user);
                 return;
             }
 
@@ -580,58 +530,9 @@ class Bot
                 }
 
                 if ($menuAction === 'help') {
-                    if ($this->auth->isAdmin($from['id'])) {
-                        $help = implode("\n", [
-                            '🛠️ <b>管理员指令大全</b>',
-                            '',
-                            '/new 申请证书（进入选择类型流程）',
-                            '/domain example.com 快速申请单域名证书',
-                            '/verify example.com DNS 解析完成后验证并签发',
-                            '/status example.com 查看订单状态',
-                            '/diag 查看诊断信息（Owner 专用）',
-                            '/quota add <tg_id> <次数> 追加申请次数',
-                            '/ban <tg_id> 封禁用户',
-                            '/unban <tg_id> 解封用户',
-                            '',
-                            '📌 <b>常用按钮</b>',
-                            '🆕 申请证书 / 📂 我的订单 / 📖 使用帮助',
-                            '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
-                            '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
-                            'DNS 已验证：等待后台签发 / 刷新状态',
-                            '已签发：下载文件、查看证书信息、重新导出',
-                            '',
-                            '📌 <b>状态说明</b>',
-                            '待完善：订单未完成，需选择证书类型并提交域名。',
-                            '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
-                            'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
-                            '已签发：证书已签发，可下载文件。',
-                        ]);
-                        $this->sendMainMenu($chatId, $help);
-                    } else {
-                        $userId = $this->getUserIdByTgId($from);
-                        $quota = 0;
-                        if ($userId) {
-                            $userRecord = TgUser::where('id', $userId)->find();
-                            $quota = (int) ($userRecord['apply_quota'] ?? 0);
-                        }
-                        $this->sendMainMenu(
-                            $chatId,
-                            "📖 <b>使用帮助</b>\n\n" .
-                            "当前剩余申请次数：<b>{$quota}</b>\n" .
-                            "如需增加次数，请联系管理员。\n\n" .
-                            "📌 <b>常用按钮</b>\n" .
-                            "🆕 申请证书 / 📂 我的订单 / 📖 使用帮助\n" .
-                            "待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单\n" .
-                            "待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单\n" .
-                            "DNS 已验证：🔄 刷新状态 / ❌ 取消订单\n" .
-                            "已签发：下载文件、查看证书信息、重新导出\n\n" .
-                            "待完善：请选择证书类型并提交域名。\n" .
-                            "待添加 DNS 解析：按提示添加 TXT 记录后点击「✅ 我已解析，开始验证」。\n" .
-                            "DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。\n" .
-                            "已签发：证书已签发，使用下方按钮下载。\n\n" .
-                            "提示：任何时候都可以通过订单列表继续或取消订单。"
-                        );
-                    }
+                    $userId = $this->getUserIdByTgId($from);
+                    $userInfo = $userId ? TgUser::where('id', $userId)->find() : null;
+                    $this->sendHelpMessage($chatId, $from['id'] ?? 0, $userInfo ? $userInfo->toArray() : []);
                     return;
                 }
 
@@ -1000,6 +901,62 @@ class Bot
         }
 
         return false;
+    }
+
+    private function sendHelpMessage(int $chatId, int $tgId, array $user): void
+    {
+        if ($this->auth->isAdmin($tgId)) {
+            $help = implode("\n", [
+                '🛠️ <b>管理员指令大全</b>',
+                '',
+                '/new 申请证书（进入选择类型流程）',
+                '/domain example.com 快速申请单域名证书',
+                '/verify example.com DNS 解析完成后验证并签发',
+                '/status example.com 查看订单状态',
+                '/diag 查看诊断信息（Owner 专用）',
+                '/quota add <tg_id> <次数> 追加申请次数',
+                '/ban <tg_id> 封禁用户',
+                '/unban <tg_id> 解封用户',
+                '',
+                '📌 <b>常用按钮</b>',
+                '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
+                '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
+                '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+                'DNS 已验证：等待后台签发 / 刷新状态',
+                '已签发：下载文件、查看证书信息、重新导出',
+                '',
+                '📌 <b>状态说明</b>',
+                '待完善：订单未完成，需选择证书类型并提交域名。',
+                '待添加 DNS 解析：已生成 TXT 记录，需完成 DNS 解析后点击验证。',
+                'DNS 已验证：DNS 已验证，系统自动签发，等待完成。',
+                '已签发：证书已签发，可下载文件。',
+            ]);
+            $this->sendMainMenu($chatId, $help);
+            return;
+        }
+
+        $quota = (int) ($user['apply_quota'] ?? 0);
+        $help = implode("\n", [
+            '📖 <b>使用帮助</b>',
+            '',
+            "当前剩余申请次数：<b>{$quota}</b>",
+            '如需增加次数，请联系管理员。',
+            '',
+            '📌 <b>常用按钮</b>',
+            '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
+            '待完善：选择证书类型、提交域名、提交生成 DNS 记录任务、取消订单',
+            '待添加 DNS 解析：✅ 我已解析，开始验证 / 🔁 重新生成DNS记录 / ❌ 取消订单',
+            'DNS 已验证：🔄 刷新状态',
+            '已签发：下载文件、查看证书信息、重新导出',
+            '',
+            '待完善：请选择证书类型并提交域名。',
+            '待添加 DNS 解析：按提示添加 TXT 记录后点击「我已完成解析（验证）」。',
+            'DNS 已验证：DNS 已验证，系统自动签发，请稍后刷新状态。',
+            '已签发：证书已签发，使用下方按钮下载。',
+            '',
+            '提示：任何时候都可以通过订单列表继续或取消订单。',
+        ]);
+        $this->sendMainMenu($chatId, $help);
     }
 
     private function handleFallbackDomainInput(array $user, array $message, int $chatId, string $text): bool
