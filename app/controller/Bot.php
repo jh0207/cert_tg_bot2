@@ -92,10 +92,6 @@ class Bot
             if ($this->handlePendingInput($user, $message, $chatId, $text)) {
                 return;
             }
-
-            if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
-                return;
-            }
             $domainInput = $this->extractCommandArgument($text, '/domain');
 
             if ($this->handleFallbackDomainInput($user, $message, $chatId, $text)) {
@@ -244,6 +240,48 @@ class Bot
                 }
                 $targetUser->save(['is_banned' => 1]);
                 $this->telegram->sendMessage($chatId, "✅ 已封禁用户 <b>{$this->formatTargetLabel($targetUser)}</b>。");
+                return;
+            }
+
+            if (strpos($text, '/promote') === 0) {
+                if (!$this->auth->isOwner($message['from']['id'])) {
+                    $this->telegram->sendMessage($chatId, '❌ 仅 Owner 可设置管理员。');
+                    return;
+                }
+
+                $parts = preg_split('/\s+/', trim($text));
+                $targetUser = isset($parts[1]) ? $this->resolveTargetUser($parts[1]) : null;
+                if (!$targetUser) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/promote @用户名');
+                    return;
+                }
+                $result = $this->auth->promote($message['from']['id'], (int) $targetUser['tg_id']);
+                if (!($result['success'] ?? false)) {
+                    $this->telegram->sendMessage($chatId, '❌ ' . ($result['message'] ?? '设置失败'));
+                    return;
+                }
+                $this->telegram->sendMessage($chatId, "✅ 已将用户 <b>{$this->formatTargetLabel($targetUser)}</b> 设置为管理员。");
+                return;
+            }
+
+            if (strpos($text, '/demote') === 0) {
+                if (!$this->auth->isOwner($message['from']['id'])) {
+                    $this->telegram->sendMessage($chatId, '❌ 仅 Owner 可取消管理员。');
+                    return;
+                }
+
+                $parts = preg_split('/\s+/', trim($text));
+                $targetUser = isset($parts[1]) ? $this->resolveTargetUser($parts[1]) : null;
+                if (!$targetUser) {
+                    $this->telegram->sendMessage($chatId, '⚠️ 用法：/demote @用户名');
+                    return;
+                }
+                $result = $this->auth->demote($message['from']['id'], (int) $targetUser['tg_id']);
+                if (!($result['success'] ?? false)) {
+                    $this->telegram->sendMessage($chatId, '❌ ' . ($result['message'] ?? '取消失败'));
+                    return;
+                }
+                $this->telegram->sendMessage($chatId, "✅ 已取消用户 <b>{$this->formatTargetLabel($targetUser)}</b> 的管理员权限。");
                 return;
             }
 
@@ -900,9 +938,11 @@ class Bot
                 '/verify example.com DNS 解析完成后验证并签发',
                 '/status example.com 查看订单状态',
                 '/diag 查看诊断信息（Owner 专用）',
-                        '/quota add @用户名 追加申请次数（示例：/quota add @someone 3）',
-                        '/ban @用户名 封禁用户',
-                        '/unban @用户名 解封用户',
+                '/quota add @用户名 追加申请次数（示例：/quota add @someone 3）',
+                '/ban @用户名 封禁用户',
+                '/unban @用户名 解封用户',
+                '/promote @用户名 设置管理员（Owner 专用）',
+                '/demote @用户名 取消管理员（Owner 专用）',
                 '',
                 '📌 <b>常用按钮</b>',
                 '🆕 申请证书 / 🔎 查询状态 / 📂 订单记录 / 📖 使用帮助',
