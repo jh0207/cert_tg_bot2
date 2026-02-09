@@ -6,6 +6,7 @@ CREATE TABLE `tg_users` (
   `last_name` VARCHAR(64) NOT NULL DEFAULT '',
   `role` ENUM('owner','admin','user') NOT NULL DEFAULT 'user',
   `apply_quota` INT UNSIGNED NOT NULL DEFAULT 1,
+  `is_banned` TINYINT(1) NOT NULL DEFAULT 0,
   `pending_action` VARCHAR(64) NOT NULL DEFAULT '',
   `pending_order_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL,
