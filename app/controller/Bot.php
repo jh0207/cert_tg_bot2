@@ -45,6 +45,10 @@ class Bot
             if (!$chatId || $text === '') {
                 return;
             }
+            $isPrivateChat = $this->isPrivateChat($message);
+            if (!$isPrivateChat && !$this->isMentioned($message, $text)) {
+                return;
+            }
 
             $this->auth->startUser($message['from']);
             $userRecord = TgUser::where('tg_id', $message['from']['id'])->find();
@@ -59,6 +63,10 @@ class Bot
             $user = $userRecord->toArray();
             if ((int) ($user['is_banned'] ?? 0) === 1) {
                 $this->telegram->sendMessage($chatId, '🚫 你的账号已被封禁，请联系管理员。');
+                return;
+            }
+            if (!$isPrivateChat) {
+                $this->telegram->sendMessage($chatId, $this->buildGroupUserNotice($user));
                 return;
             }
             if ($text === '🆕 申请证书') {
@@ -760,6 +768,39 @@ class Bot
             ['🆕 申请证书', '📂 我的订单'],
             ['🔎 查询状态', '📖 使用帮助'],
         ];
+    }
+
+    private function isPrivateChat(array $message): bool
+    {
+        return ($message['chat']['type'] ?? '') === 'private';
+    }
+
+    private function isMentioned(array $message, string $text): bool
+    {
+        if (strpos($text, '@') === false) {
+            return false;
+        }
+
+        $entities = $message['entities'] ?? [];
+        foreach ($entities as $entity) {
+            if (($entity['type'] ?? '') !== 'mention') {
+                continue;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private function buildGroupUserNotice(array $user): string
+    {
+        $role = $user['role'] ?? 'user';
+        $quota = (int) ($user['apply_quota'] ?? 0);
+        $message = "✅ 已为你注册。\n";
+        $message .= "身份：<b>{$role}</b>\n";
+        $message .= "剩余申请次数：<b>{$quota}</b>\n";
+        $message .= "请私聊我使用完整功能。";
+        return $message;
     }
 
     private function sendMainMenu(int $chatId, string $text): void
